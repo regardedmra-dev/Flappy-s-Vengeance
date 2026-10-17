@@ -33,9 +33,6 @@
 </head>
 <body>
 <canvas id="game" width="400" height="600"></canvas>
-<div id="dbg" style="color:#ddd;font:12px monospace;margin-top:8px;white-space:pre;text-align:left;width:min(calc(100vw - 16px), calc((100vh - 16px) * 2 / 3))">
-<button id="tone" style="font:12px monospace;padding:4px 8px;margin-bottom:6px">Test tone</button>
-<span id="dbgtext">audio status: loading...</span></div>
 
 <script>
 (() => {
@@ -2090,8 +2087,11 @@
 
   if (YT) {
     YT.game.firstFrameReady();
-    ytAudio = YT.system.isAudioEnabled();
-    YT.system.onAudioEnabledChange(on => { ytAudio = on; syncAudio(); });
+    // Only follow YouTube's audio setting when running inside YouTube's player (an iframe).
+    // Opened directly, the SDK is a no-op that reports audio off, so keep sound on.
+    const inYouTube = window.top !== window.self;
+    ytAudio = inYouTube ? YT.system.isAudioEnabled() : true;
+    if (inYouTube) YT.system.onAudioEnabledChange(on => { ytAudio = on; syncAudio(); });
     YT.system.onPause(() => { appPaused = true; cancelAnimationFrame(rafId); rafId = 0; saveProgress(false); syncAudio(); });
     YT.system.onResume(() => { appPaused = false; syncAudio(); if (!rafId) rafId = requestAnimationFrame(loop); });
     YT.game.loadData()
@@ -2099,39 +2099,6 @@
       .catch(() => {})
       .then(() => { loaded = true; YT.game.gameReady(); });
   }
-
-  // ---------- Temporary audio diagnostic (remove after debugging) ----------
-  const dbgText = document.getElementById('dbgtext');
-  const toneBtn = document.getElementById('tone');
-  let toneCtx = null;
-  let toneMsg = 'test tone: not pressed yet';
-  setInterval(() => {
-    dbgText.textContent =
-      'game audio ctx: ' + (actx ? actx.state : 'not created (tap the game first)') +
-      '\nsound on (M key): ' + soundOn +
-      '\nYT audio setting: ' + ytAudio +
-      '\nYT paused: ' + appPaused +
-      '\nmusic track: ' + (track ? 'playing' : 'none') +
-      '\n' + toneMsg +
-      '\nUA: ' + navigator.userAgent.slice(0, 60);
-  }, 500);
-  toneBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    try {
-      if (!toneCtx) toneCtx = new (window.AudioContext || window.webkitAudioContext)();
-      toneCtx.resume().then(() => {
-        const o = toneCtx.createOscillator();
-        const g = toneCtx.createGain();
-        o.frequency.value = 440;
-        g.gain.value = 0.2;
-        o.connect(g); g.connect(toneCtx.destination);
-        o.start(); o.stop(toneCtx.currentTime + 0.6);
-        toneMsg = 'test tone: played (ctx ' + toneCtx.state + ', ' + toneCtx.sampleRate + ' Hz)';
-      }).catch((err) => { toneMsg = 'test tone: failed (' + err + ')'; });
-    } catch (err) {
-      toneMsg = 'test tone: error (' + err + ')';
-    }
-  });
 
   resetLevel(0);
   state = S.READY;
