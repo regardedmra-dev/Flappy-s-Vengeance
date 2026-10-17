@@ -1,0 +1,2107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script src="https://www.youtube.com/game_api/v1"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flappy's Vengeance</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+  }
+  canvas {
+    display: block;
+    background: #70c5ce;
+    border: 4px solid #333;
+    border-radius: 6px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    width: min(calc(100vw - 16px), calc((100vh - 16px) * 2 / 3));
+    height: auto;
+    aspect-ratio: 2 / 3;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="400" height="600"></canvas>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = 400, H = 600;
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // YouTube Playables SDK (null when the page is opened on its own)
+  const YT = (typeof ytgame !== 'undefined') ? ytgame : null;
+
+  // ---------- Physics ----------
+  const FLAP_VELOCITY = -6.4;     // about 70% of the original flap height
+  const BIRD_X = 90;
+  const BIRD_RADIUS = 14;         // drawn size
+  const HIT_RADIUS = 10;          // smaller invisible hitbox so near-misses feel fair
+  const PIPE_WIDTH = 62;
+  const GROUND_HEIGHT = 80;
+  const PIPE_MIN_TOP = 70;
+  const PICKUP_CHANCE = 0.3;
+  const PARACHUTE_FALL = 1.2;     // fastest fall while gliding
+  const DEV_MODE = false;         // dev build: keys 1-0 jump straight to a level
+  const STAMINA_MAX = 600;        // 10 seconds of gliding
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const maxTop = (gap) => H - GROUND_HEIGHT - gap - 70;
+
+  // ---------- Levels 1-10 ----------
+  // enemyRate = chance an enemy appears each time a pipe spawns.
+  // Level 10 ends with the Serpent of the Tubes (boss battle).
+  const LEVELS = [
+    { pipes: 8,  gap: 210, speed: 1.8, spacing: 280, amp: 0,  enemyRate: 0,    sky: ['#4ec0ca', '#a6e4ea'],
+      music: { bpm: 100, wave: 'square',
+        lead: ['C5','-','E5','G5','C6','-','G5','E5','C5','-','E5','G5','A5','-','G5','-'],
+        bass: ['C3','-','C3','-','G2','-','G2','-','A2','-','A2','-','F2','-','G2','-'] } },
+
+    { pipes: 9,  gap: 200, speed: 2.0, spacing: 272, amp: 0,  enemyRate: 0.15, sky: ['#5aa9e6', '#bfe3ff'],
+      music: { bpm: 110, wave: 'square',
+        lead: ['A4','C5','E5','A5','G5','E5','C5','E5','A4','C5','D5','F5','E5','D5','C5','-'],
+        bass: ['A2','-','A2','-','F2','-','F2','-','D2','-','D2','-','E2','-','E2','-'] } },
+
+    { pipes: 10, gap: 192, speed: 2.1, spacing: 266, amp: 0,  enemyRate: 0.25, sky: ['#7b6cd9', '#d4c8f7'],
+      music: { bpm: 120, wave: 'sawtooth',
+        lead: ['D5','F5','A5','D6','C6','A5','F5','A5','G5','B5','D6','B5','A5','G5','F5','E5'],
+        bass: ['D3','D3','A2','A2','A#2','A#2','C3','C3','D3','D3','A2','A2','G2','G2','A2','A2'] } },
+
+    { pipes: 10, gap: 184, speed: 2.3, spacing: 260, amp: 0,  enemyRate: 0.3,  sky: ['#e08a4e', '#ffd9a8'],
+      music: { bpm: 130, wave: 'triangle',
+        lead: ['E5','F5','E5','-','B5','A5','G5','A5','E5','F5','E5','-','D5','E5','F5','G5'],
+        bass: ['E2','E2','E2','E2','C3','C3','D3','D3','E2','E2','E2','E2','B2','B2','A2','A2'] } },
+
+    { pipes: 11, gap: 178, speed: 2.4, spacing: 256, amp: 0,  enemyRate: 0.35, sky: ['#3aa17e', '#b8ecd3'],
+      music: { bpm: 140, wave: 'square',
+        lead: ['G5','B5','D6','G6','D6','B5','G5','B5','A5','C6','E6','C6','A5','C6','E6','-'],
+        bass: ['G2','G2','D3','D3','G2','G2','D3','D3','C3','C3','G2','G2','A2','A2','B2','-'] } },
+
+    { pipes: 11, gap: 172, speed: 2.6, spacing: 252, amp: 12, enemyRate: 0.4,  sky: ['#d9535a', '#ffc2c4'],
+      music: { bpm: 150, wave: 'square',
+        lead: ['F5','A5','C6','F5','G5','A5','F5','-','A5','C6','F6','E6','D6','C6','A5','G5'],
+        bass: ['F2','F2','C3','C3','F2','F2','G2','G2','A#2','A#2','F2','F2','G2','G2','C3','C3'] } },
+
+    { pipes: 12, gap: 166, speed: 2.7, spacing: 248, amp: 16, enemyRate: 0.45, sky: ['#2f3b6b', '#7d8fc9'],
+      music: { bpm: 160, wave: 'sawtooth',
+        lead: ['C5','D#5','G5','C6','A#5','G5','D#5','G5','C5','D#5','F5','G#5','F5','D#5','C5','-'],
+        bass: ['C3','C3','G2','G2','G#2','G#2','A#2','A#2','C3','C3','G2','G2','F2','F2','G2','G2'] } },
+
+    { pipes: 12, gap: 160, speed: 2.8, spacing: 244, amp: 20, enemyRate: 0.5,  sky: ['#1d1f3d', '#4a4f8a'],
+      music: { bpm: 170, wave: 'square',
+        lead: ['B4','D5','F#5','B5','A5','F#5','D5','F#5','G5','B5','D6','B5','A5','F#5','E5','D5'],
+        bass: ['B2','B2','F#2','F#2','G2','G2','D3','D3','A2','A2','E2','E2','F#2','F#2','B2','B2'] } },
+
+    { pipes: 13, gap: 154, speed: 3.0, spacing: 240, amp: 24, enemyRate: 0.55, sky: ['#0f2a2a', '#2f6b5f'],
+      music: { bpm: 180, wave: 'triangle',
+        lead: ['E5','G#5','B5','E6','D#6','B5','G#5','B5','A5','C#6','E6','C#6','B5','G#5','F#5','E5'],
+        bass: ['E3','E3','B2','B2','A2','A2','B2','B2','E3','E3','B2','B2','C#3','C#3','B2','B2'] } },
+
+    { pipes: 14, gap: 148, speed: 3.1, spacing: 236, amp: 28, enemyRate: 0.6,  sky: ['#6b1f4a', '#d9708f'],
+      music: { bpm: 190, wave: 'square',
+        lead: ['D6','C6','A5','F5','D5','F5','A5','C6','D6','E6','F6','E6','D6','C6','A5','D5'],
+        bass: ['D3','D3','A2','A2','D3','D3','F3','F3','A#2','A#2','C3','C3','D3','D3','A2','A2'] } },
+  ];
+
+  // Boss theme: a tense E-minor loop for the serpent fight.
+  const BOSS_MUSIC = { bpm: 150, wave: 'sawtooth',
+    lead: ['E5','-','E5','-','G5','-','E5','B4','E5','-','F#5','-','E5','D5','B4','-'],
+    bass: ['E2','E2','E3','E2','E2','E2','E3','E2','C2','C2','C3','C2','D2','D2','B1','B1'] };
+
+  // Victory theme: a bright major-key fanfare loop for the ending.
+  const VICTORY_MUSIC = { bpm: 120, wave: 'square',
+    lead: ['G4','C5','E5','G5','C6','-','G5','E5','C5','E5','G5','-','A5','-','G5','-'],
+    bass: ['C3','-','G2','-','C3','-','G2','-','F2','-','C3','-','G2','-','C3','-'] };
+  const ENDING_LEN = 900;   // frames the ending plays before a press starts a new game
+
+  // Gravity per level: gentle on level 1, stronger each level after that.
+  LEVELS.forEach((L, i) => { L.gravity = 0.2 + i * 0.012; });
+
+  // ---------- Audio ----------
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const PC = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+  let actx = null, noiseBuf = null;
+  let soundOn = true;          // the in-game M key
+  let ytAudio = true;          // YouTube's audio setting
+  let appPaused = false;       // the platform has paused the game
+  const soundAllowed = () => ytAudio && !appPaused;
+  let rafId = 0;
+  let track = null;
+  let musicStep = 0;
+  let nextNoteTime = 0;
+
+  function ensureAudio() {
+    if (!AC) return;
+    if (!actx) {
+      actx = new AC();
+      noiseBuf = actx.createBuffer(1, Math.floor(actx.sampleRate * 0.05), actx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      nextNoteTime = actx.currentTime + 0.05;
+      setInterval(schedule, 25);
+    }
+    syncAudio();
+  }
+
+  function noteFreq(n) {
+    if (!n || n === '-') return 0;
+    const m = /^([A-G])(#?)(\d)$/.exec(n);
+    const midi = (parseInt(m[3], 10) + 1) * 12 + PC[m[1]] + (m[2] ? 1 : 0);
+    return 440 * Math.pow(2, (midi - 69) / 12);
+  }
+
+  function tone(freq, t, dur, wave, vol, endFreq) {
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = wave;
+    o.frequency.setValueAtTime(freq, t);
+    if (endFreq) o.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g);
+    g.connect(actx.destination);
+    o.start(t);
+    o.stop(t + dur + 0.02);
+  }
+
+  function hat(t) {
+    const s = actx.createBufferSource();
+    const f = actx.createBiquadFilter();
+    const g = actx.createGain();
+    s.buffer = noiseBuf;
+    f.type = 'highpass';
+    f.frequency.value = 7000;
+    g.gain.setValueAtTime(0.035, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+    s.connect(f); f.connect(g); g.connect(actx.destination);
+    s.start(t);
+    s.stop(t + 0.05);
+  }
+
+  function schedule() {
+    if (!actx || !soundOn || !soundAllowed() || !track) return;
+    if (nextNoteTime < actx.currentTime) nextNoteTime = actx.currentTime + 0.05;
+    const eighth = 60 / track.bpm / 2;
+    while (nextNoteTime < actx.currentTime + 0.12) {
+      const s = musicStep % 16;
+      const lf = noteFreq(track.lead[s]);
+      if (lf) tone(lf, nextNoteTime, eighth * 0.9, track.wave, 0.06);
+      const bf = noteFreq(track.bass[s]);
+      if (bf) tone(bf, nextNoteTime, eighth * 0.9, 'triangle', 0.1);
+      if (s % 2 === 1) hat(nextNoteTime);
+      nextNoteTime += eighth;
+      musicStep++;
+    }
+  }
+
+  function setTrack(i) {
+    if (i === 'boss') track = BOSS_MUSIC;
+    else if (i === 'win') track = VICTORY_MUSIC;
+    else track = (i == null) ? null : LEVELS[i].music;
+    musicStep = 0;
+  }
+
+  function sfx(fn) { if (actx && soundOn && soundAllowed()) fn(actx.currentTime); }
+  const sfxFlap     = () => sfx(t => tone(520, t, 0.08, 'square', 0.05, 900));
+  const sfxScore    = () => sfx(t => { tone(880, t, 0.1, 'square', 0.05); tone(1320, t + 0.08, 0.14, 'square', 0.05); });
+  const sfxDeath    = () => sfx(t => tone(420, t, 0.6, 'sawtooth', 0.08, 60));
+  const sfxClear    = () => sfx(t => [523, 659, 784, 1047].forEach((f, i) => tone(f, t + i * 0.12, 0.18, 'square', 0.06)));
+  const sfxShoot    = () => sfx(t => tone(1100, t, 0.06, 'square', 0.025, 700));
+  const sfxPop      = () => sfx(t => tone(700, t, 0.12, 'square', 0.06, 1300));
+  const sfxBossHit  = () => sfx(t => tone(180, t, 0.1, 'square', 0.06, 90));
+  const sfxPickup   = () => sfx(t => [660, 880, 1100].forEach((f, i) => tone(f, t + i * 0.05, 0.08, 'triangle', 0.08)));
+  const sfxShield   = () => sfx(t => tone(300, t, 0.3, 'triangle', 0.1, 900));
+
+  function toggleSound() {
+    soundOn = !soundOn;
+    if (soundOn && actx) nextNoteTime = actx.currentTime + 0.05;
+  }
+
+  // ---------- Game state ----------
+  const S = { READY: 0, PLAYING: 1, CLEAR: 2, DEAD: 3, WIN: 4 };
+  const WEAPONS = {
+    blaster: { name: 'BLASTER', color: '#6ef0ff', cooldown: 10, time: 600 },
+    spread:  { name: 'SPREAD',  color: '#ffa64d', cooldown: 16, time: 600 },
+    sword:   { name: 'SWORD',   color: '#e8f7ff', cooldown: 14, time: 240 },
+  };
+  const WEAPON_ORDER = ['blaster', 'spread', 'shield'];
+
+  let state = S.READY;
+  let level = 0;
+  let bird, pipes, enemies, bullets, pickups, venom, boss;
+  let score = 0, levelStartScore = 0;
+  let spawned = 0, passed = 0, levelFrames = 0;
+  let best = 0, won = false;
+  let frame = 0;
+  let clearTimer = 0, deathTime = 0, winTime = 0;
+  let particles = [];
+  let clouds = [];
+  let shakeTime = 0, flashAlpha = 0, groundOffset = 0;
+  let weapon = null;        // { type, timer }
+  let fireCd = 0;
+  let shieldTimer = 0;      // frames of shield left
+  let invuln = 0;           // frames of invulnerability after a shield hit
+  let holding = false;      // button/key currently held
+  let holdStart = null;     // when the current press began (null = no pending tap)
+  let stamina = STAMINA_MAX;
+  let staminaDelay = 0;
+  let guideTimer = 0;       // frames the next gap stays lit after collecting a scarf
+  let bond = 0;
+  let scarfTotal = 0;        // scarves found this run (the ending knits them together)
+  let endT = 0;              // frames since the ending began
+  let bossCheckpoint = null; // saved when the boss fight starts; retrying returns here             // family bond meter, filled by scarves (10 = reward)
+
+  // Progress is kept in the platform's cloud save, never in localStorage
+  let loaded = !YT;            // becomes true once the saved progress has loaded
+  // Past Glories: the dev shortcuts, unlocked for everyone once the game is finished
+  let pastGlories = DEV_MODE;
+  let canRevive = false, adBusy = false;
+  let pointer = null;          // where the last tap landed, in game coordinates
+
+  function resetLevel(idx) {
+    level = idx;
+    spawned = 0;
+    passed = 0;
+    levelFrames = 0;
+    levelStartScore = score;
+    pipes = [];
+    enemies = [];
+    bullets = [];
+    pickups = [];
+    venom = [];
+    boss = null;
+    bossCheckpoint = null;
+    invuln = 0;
+    fireCd = 0;
+    stamina = STAMINA_MAX;
+    bird = { y: H / 2 - 60, vy: 0, rot: 0, wing: 0 };
+    setTrack(level);
+  }
+
+  function initClouds() {
+    clouds = [];
+    for (let i = 0; i < 5; i++) {
+      clouds.push({
+        x: Math.random() * W,
+        y: 40 + Math.random() * 200,
+        s: 0.5 + Math.random() * 0.6,
+        speed: 0.2 + Math.random() * 0.3
+      });
+    }
+  }
+
+  function burst(x, y, n, colors, spread) {
+    for (let i = 0; i < n; i++) {
+      particles.push({
+        x, y,
+        vx: (Math.random() - 0.5) * spread,
+        vy: (Math.random() - 0.5) * spread - 2,
+        life: 40 + Math.random() * 25,
+        color: colors[Math.floor(Math.random() * colors.length)]
+      });
+    }
+  }
+
+  function spawnFlapParticles() {
+    for (let i = 0; i < 3; i++) {
+      particles.push({
+        x: BIRD_X - 10, y: bird.y + 6,
+        vx: -1 - Math.random() * 2,
+        vy: Math.random() * 2 - 1,
+        life: 20,
+        color: 'rgba(255,255,255,0.8)'
+      });
+    }
+  }
+
+  function flap() {
+    bird.vy = FLAP_VELOCITY;
+    spawnFlapParticles();
+    sfxFlap();
+  }
+
+  function saveBest() {
+    if (score > best) {
+      best = score;
+      saveProgress(true);
+    }
+  }
+
+  // Holding opens a parachute: falling slows to a gentle drift while stamina lasts.
+  // Stamina drains while holding and refills after a short pause.
+  function applyParachute() {
+    if (holding && stamina > 0) {
+      if (bird.vy > 0) bird.vy = Math.min(bird.vy, PARACHUTE_FALL);
+      stamina = Math.max(0, stamina - 1);
+      staminaDelay = 20;
+    } else if (staminaDelay > 0) {
+      staminaDelay--;
+    } else {
+      stamina = Math.min(STAMINA_MAX, stamina + 0.8);
+    }
+  }
+
+  // Returns true if the bird should die. A shield absorbs one hit instead.
+  function takeHit() {
+    if (invuln > 0) return false;
+    if (shieldTimer > 0) {
+      shieldTimer = 0;
+      invuln = 50;
+      bird.vy = -5;
+      burst(BIRD_X, bird.y, 25, ['#6ec6ff', '#fff'], 8);
+      sfxShield();
+      return false;
+    }
+    return true;
+  }
+
+  function die() {
+    if (state !== S.PLAYING) return;
+    state = S.DEAD;
+    canRevive = true;
+    deathTime = performance.now();
+    shakeTime = 15;
+    flashAlpha = 0.8;
+    weapon = null;
+    shieldTimer = 0;
+    holding = false;
+    stamina = STAMINA_MAX;
+    bond = 0;
+    guideTimer = 0;
+    setTrack(null);
+    sfxDeath();
+    burst(BIRD_X, bird.y, 20, ['#ffd34e', '#f7a13c', '#fff'], 6);
+    saveBest();
+  }
+
+  function levelComplete() {
+    const confetti = ['#ffd34e', '#ff6b6b', '#7CFC00', '#4ec0ca', '#fff'];
+    sfxClear();
+    if (level === LEVELS.length - 1) {
+      state = S.WIN;
+      winTime = performance.now();
+      saveBest();
+      burst(W / 2, 200, 70, confetti, 12);
+    } else {
+      state = S.CLEAR;
+      clearTimer = 150;
+      burst(W / 2, 200, 40, confetti, 10);
+    }
+  }
+
+  // ---------- Spawning ----------
+  function spawnPipe(L) {
+    const minT = PIPE_MIN_TOP + L.amp;
+    const maxT = maxTop(L.gap) - L.amp;
+    const base = minT + Math.random() * (maxT - minT);
+    pipes.push({
+      x: W + 10,
+      baseTop: base,
+      top: base,
+      gap: L.gap,
+      phase: Math.random() * Math.PI * 2,
+      passed: false,
+      scarf: level >= 3 && Math.random() < 0.4   // torn scarf hanging from this pipe
+    });
+    spawned++;
+  }
+
+  // The family leaves scarf fragments in the air, each one in the gap of the next pipe,
+  // so following them guides Gilmore through the tunnels.
+  function spawnScarf(L) {
+    const p = pipes[pipes.length - 1];
+    pickups.push({
+      x: W + 10 - L.spacing / 2,
+      y: p.top + p.gap / 2,
+      type: 'scarf',
+      bob: Math.random() * 6
+    });
+  }
+
+  function spawnPickup(L) {
+    pickups.push({
+      x: W + 10 - L.spacing / 2,
+      y: 120 + Math.random() * (H - GROUND_HEIGHT - 240),
+      type: WEAPON_ORDER[Math.floor(Math.random() * WEAPON_ORDER.length)],
+      bob: Math.random() * Math.PI * 2
+    });
+  }
+
+  function spawnEnemy(L) {
+    const kind = Math.random() < 0.5 ? 'bat' : 'hawk';
+    const baseY = 70 + Math.random() * (H - GROUND_HEIGHT - 140);
+    enemies.push({
+      kind,
+      x: W + 40,
+      baseY,
+      y: baseY,
+      phase: Math.random() * Math.PI * 2,
+      r: kind === 'bat' ? 16 : 18,
+      dead: false
+    });
+  }
+
+  function fire() {
+    const w = WEAPONS[weapon.type];
+    fireCd = w.cooldown;
+    sfxShoot();
+    if (weapon.type === 'sword') {
+      // A slash that cuts through everything in its path
+      bullets.push({ x: BIRD_X + 22, y: bird.y, vx: 12, vy: 0, color: w.color, pierce: true, hitBoss: false });
+    } else if (weapon.type === 'blaster') {
+      bullets.push({ x: BIRD_X + 18, y: bird.y, vx: 10, vy: 0, color: w.color });
+    } else {
+      [-1.4, 0, 1.4].forEach(vy => {
+        bullets.push({ x: BIRD_X + 18, y: bird.y, vx: 8, vy, color: w.color });
+      });
+    }
+  }
+
+  // ---------- Pickups ----------
+  function collectPickup(k) {
+    if (k.type === 'scarf') {
+      score++;
+      stamina = Math.min(STAMINA_MAX, stamina + 120); // refills part of the parachute
+      guideTimer = 180;                               // lights the next gap for 3 seconds
+      burst(k.x, k.y, 10, ['#c0392b', '#f5f0e6'], 6);
+      scarfTotal++;
+      // Every scarf gives a sword for a few seconds
+      weapon = { type: 'sword', timer: WEAPONS.sword.time };
+      fireCd = 0;
+      // Every two scarves give a shield
+      bond++;
+      if (bond >= 2) {
+        bond = 0;
+        shieldTimer = 600;
+        burst(k.x, k.y, 30, ['#6ec6ff', '#fff'], 10);
+        sfxShield();
+      }
+      sfxPickup();
+      return;
+    }
+    if (k.type === 'shield') {
+      shieldTimer = 600;
+    } else {
+      weapon = { type: k.type, timer: WEAPONS[k.type].time };
+      fireCd = 0;
+    }
+    burst(k.x, k.y, 18, ['#fff', k.type === 'shield' ? '#6ec6ff' : WEAPONS[k.type].color], 7);
+    sfxPickup();
+  }
+
+  // ---------- Boss: the Serpent of the Tubes (level 10) ----------
+  function startBoss() {
+    bossCheckpoint = { score };   // checkpoint: all pipes are behind the bird
+    setTrack('boss');
+    boss = {
+      x: W + 90,
+      baseY: H / 2 - 70,
+      y: H / 2 - 70,
+      hp: 36,
+      maxHp: 36,
+      t: 0,
+      shotCd: 90,
+      flash: 0
+    };
+    enemies = [];
+    venom = [];
+    // A weapon is waiting at the start of the arena
+    pickups.push({ x: W + 40, y: 240, type: 'blaster', bob: 0 });
+  }
+
+  function updateBoss() {
+    const b = boss;
+    b.t++;
+    if (b.x > W - 110) b.x -= 2;                       // slithers in from the right
+    b.y = b.baseY + Math.sin(b.t * 0.02) * 80;         // sways up and down (gentler sway)
+    if (b.flash > 0) b.flash--;
+
+    // A new weapon every 4 seconds so the fight stays winnable
+    if (b.t % 240 === 0) {
+      pickups.push({
+        x: W + 20,
+        y: 140 + Math.random() * (H - GROUND_HEIGHT - 260),
+        type: Math.random() < 0.5 ? 'blaster' : 'spread',
+        bob: Math.random() * 6
+      });
+    }
+
+    // Spits venom at the bird (faster when wounded)
+    b.shotCd--;
+    if (b.shotCd <= 0) {
+      venom.push({
+        x: b.x - 30,
+        y: b.y,
+        vx: -3.6,
+        vy: clamp((bird.y - b.y) / 80, -1.6, 1.6)
+      });
+      b.shotCd = b.hp < 18 ? 90 : 130;   // slower spitting, a bit faster when wounded
+    }
+
+    for (let i = venom.length - 1; i >= 0; i--) {
+      const v = venom[i];
+      v.x += v.vx;
+      v.y += v.vy;
+      const dx = v.x - BIRD_X, dy = v.y - bird.y;
+      if (dx * dx + dy * dy < (HIT_RADIUS + 6) * (HIT_RADIUS + 6)) {
+        venom.splice(i, 1);
+        if (takeHit()) { die(); return; }
+      } else if (v.x < -30) {
+        venom.splice(i, 1);
+      }
+    }
+  }
+
+  function defeatBoss() {
+    burst(boss.x, boss.y, 60, ['#7CFC00', '#ffd34e', '#fff', '#3c7d4f'], 14);
+    venom = [];
+    startEnding();
+  }
+
+  function startEnding() {
+    state = S.WIN;
+    endT = 0;
+    winTime = performance.now();
+    pickups = [];
+    enemies = [];
+    bullets = [];
+    if (boss) { boss.x = W - 110; boss.hp = 0; }
+    shakeTime = 20;
+    flashAlpha = 0.9;
+    setTrack('win');
+    pastGlories = true;
+    won = true;
+    saveProgress(false);
+    sfxClear();
+    saveBest();
+  }
+
+  // The serpent shudders, slumps into the ground and fades; the ending then takes over
+  function updateEnding() {
+    endT++;
+    if (!boss) return;
+    boss.t++;
+    if (endT < 40 && endT % 8 === 0) {
+      boss.flash = 4;
+      burst(boss.x - 20, boss.y, 6, ['#ffd34e', '#fff'], 4);
+    }
+    const sink = clamp((endT - 40) / 120, 0, 1);
+    boss.y = boss.baseY + sink * sink * 200;
+    boss.alpha = 1 - clamp((endT - 100) / 60, 0, 1);
+    if (endT >= 160) boss = null;
+  }
+
+  // ---------- Update ----------
+  function updatePlaying(L) {
+    levelFrames++;
+    bird.vy += L.gravity;
+    applyParachute();
+    bird.y += bird.vy;
+    bird.rot = clamp(bird.vy * 0.08, -0.5, Math.PI / 2);
+    bird.wing = (frame >> 2) % 3;
+
+    if (invuln > 0) invuln--;
+    if (shieldTimer > 0) shieldTimer--;
+    if (weapon) {
+      weapon.timer--;
+      if (weapon.timer <= 0) weapon = null;
+    }
+    if (fireCd > 0) fireCd--;
+    if (guideTimer > 0) guideTimer--;
+    if (weapon && fireCd <= 0) fire();
+
+    // Spawn pipes by distance (with a grace period at level start)
+    if (spawned < L.pipes && levelFrames > 90) {
+      const last = pipes[pipes.length - 1];
+      if (!last || last.x <= W + 10 - L.spacing) {
+        spawnPipe(L);
+        if (level >= 3) spawnScarf(L);
+        if (Math.random() < PICKUP_CHANCE) spawnPickup(L);
+        if (Math.random() < L.enemyRate) spawnEnemy(L);
+      }
+    }
+
+    // Pipes
+    for (const p of pipes) {
+      p.x -= L.speed;
+      if (L.amp > 0) {
+        p.top = clamp(p.baseTop + Math.sin(frame * 0.03 + p.phase) * L.amp, PIPE_MIN_TOP, maxTop(p.gap));
+      }
+      if (!p.passed && p.x + PIPE_WIDTH < BIRD_X - BIRD_RADIUS) {
+        p.passed = true;
+        score++;
+        passed++;
+        sfxScore();
+        burst(BIRD_X, bird.y, 8, ['#7CFC00'], 4);
+      }
+    }
+    while (pipes.length && pipes[0].x + PIPE_WIDTH < -10) pipes.shift();
+
+    // Pickups (weapons, shields, scarf trail)
+    for (let i = pickups.length - 1; i >= 0; i--) {
+      const k = pickups[i];
+      k.x -= L.speed;
+      k.bob += 0.06;
+      const dx = k.x - BIRD_X, dy = (k.y + Math.sin(k.bob) * 6) - bird.y;
+      if (dx * dx + dy * dy < (BIRD_RADIUS + 14) * (BIRD_RADIUS + 14)) {
+        collectPickup(k);
+        pickups.splice(i, 1);
+      } else if (k.x < -30) {
+        pickups.splice(i, 1);
+      }
+    }
+
+    // Enemies
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      e.x -= L.speed + (e.kind === 'hawk' ? 2 : 0.8);
+      if (e.kind === 'bat') e.y = e.baseY + Math.sin(frame * 0.05 + e.phase) * 45;
+      if (e.x < -60 || e.dead) enemies.splice(i, 1);
+    }
+
+    // Bullets vs enemies and boss
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.x += b.vx;
+      b.y += b.vy;
+      let used = false;
+      for (const e of enemies) {
+        if (e.dead) continue;
+        const dx = b.x - e.x, dy = b.y - e.y;
+        if (dx * dx + dy * dy < (e.r + 4) * (e.r + 4)) {
+          e.dead = true;
+          score += 2;
+          burst(e.x, e.y, 16, ['#ff6b6b', '#ffd34e', '#fff'], 8);
+          sfxPop();
+          used = !b.pierce;
+          break;
+        }
+      }
+      if (!used && boss && !b.hitBoss) {
+        const dx = b.x - boss.x, dy = b.y - boss.y;
+        if (dx * dx + dy * dy < 36 * 36) {
+          boss.hp -= b.pierce ? 3 : 1;   // the sword hits three times as hard
+          boss.flash = 6;
+          sfxBossHit();
+          burst(b.x, b.y, 6, ['#7CFC00', '#fff'], 5);
+          b.hitBoss = true;
+          used = !b.pierce;
+          if (boss.hp <= 0) { defeatBoss(); return; }
+        }
+      }
+      if (used || b.x > W + 20 || b.y < -20 || b.y > H) bullets.splice(i, 1);
+    }
+
+    if (boss) {
+      updateBoss();
+      if (state !== S.PLAYING) return;
+    }
+
+    // Level end: the last pipe is passed. Level 10 continues into the boss fight.
+    if (spawned >= L.pipes && pipes.length === 0) {
+      if (level === LEVELS.length - 1) {
+        if (!boss) startBoss();
+      } else {
+        levelComplete();
+        return;
+      }
+    }
+
+    // Ground and ceiling
+    if (bird.y + HIT_RADIUS >= H - GROUND_HEIGHT || bird.y - HIT_RADIUS <= 0) {
+      if (takeHit()) { die(); return; }
+      bird.y = clamp(bird.y, HIT_RADIUS + 2, H - GROUND_HEIGHT - HIT_RADIUS - 2);
+    }
+
+    // Pipes
+    if (invuln <= 0) {
+      // While the scarf light is on, the next gap cushions the bird: touching its edge
+      // gently pushes it back inside instead of crashing.
+      const guided = guideTimer > 0 ? pipes.find(q => !q.passed && q.x + PIPE_WIDTH > BIRD_X) : null;
+      for (const p of pipes) {
+        const overlapX = BIRD_X + HIT_RADIUS > p.x + 4 && BIRD_X - HIT_RADIUS < p.x + PIPE_WIDTH - 4;
+        if (overlapX && (bird.y - HIT_RADIUS < p.top || bird.y + HIT_RADIUS > p.top + p.gap)) {
+          if (p === guided) {
+            bird.y = clamp(bird.y, p.top + HIT_RADIUS, p.top + p.gap - HIT_RADIUS);
+            bird.vy *= 0.5;
+            break;
+          }
+          if (takeHit()) { die(); return; }
+          break;
+        }
+      }
+    }
+
+    // Enemies touching the bird
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      if (e.dead) continue;
+      const dx = e.x - BIRD_X, dy = e.y - bird.y;
+      if (dx * dx + dy * dy < (e.r - 3 + HIT_RADIUS) * (e.r - 3 + HIT_RADIUS)) {
+        if (invuln > 0) break;
+        if (shieldTimer > 0) {
+          e.dead = true;
+          burst(e.x, e.y, 16, ['#6ec6ff', '#fff'], 8);
+        }
+        if (takeHit()) { die(); return; }
+        break;
+      }
+    }
+  }
+
+  function update() {
+    frame++;
+    const L = LEVELS[level];
+    groundOffset = (groundOffset + L.speed) % 24;
+
+    for (const c of clouds) {
+      c.x -= c.speed;
+      if (c.x < -100) { c.x = W + 60; c.y = 40 + Math.random() * 200; }
+    }
+    if (shakeTime > 0) shakeTime--;
+    if (flashAlpha > 0) flashAlpha -= 0.04;
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life--;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    // Idle states: title card, level-clear banner, win screen
+    if (state === S.READY || state === S.CLEAR || state === S.WIN) {
+      bird.y = H / 2 - 60 + Math.sin(frame / 12) * 8;
+      bird.vy = 0;
+      bird.rot = 0;
+      bird.wing = (frame >> 3) % 3;
+      if (state === S.WIN) updateEnding();
+      if (state === S.CLEAR) {
+        clearTimer--;
+        if (clearTimer <= 0) {
+          resetLevel(level + 1);
+          state = S.READY;
+        }
+      }
+      return;
+    }
+
+    if (state === S.PLAYING) {
+      updatePlaying(L);
+      return;
+    }
+
+    if (state === S.DEAD) {
+      bird.vy += L.gravity;
+      bird.y += bird.vy;
+      bird.rot = Math.min(Math.PI / 2, bird.rot + 0.12);
+      if (bird.y + BIRD_RADIUS > H - GROUND_HEIGHT) {
+        bird.y = H - GROUND_HEIGHT - BIRD_RADIUS;
+        bird.vy = 0;
+      }
+    }
+  }
+
+  // ---------- Input ----------
+  function onPress() {
+    if (!loaded) return;
+    ensureAudio();
+    const now = performance.now();
+    switch (state) {
+      case S.READY:
+        state = S.PLAYING;
+        holdStart = null;
+        flap();
+        break;
+      case S.PLAYING:
+        // No flap yet: a quick tap flaps on release, a longer hold opens the parachute
+        holdStart = now;
+        break;
+      case S.DEAD:
+        if (now - deathTime > 600) {
+          if (canRevive && YT && YT.ads && pointer && inBox(pointer, AD_BTN)) {
+            watchAdToRevive();
+            break;
+          }
+          if (adBusy) break;
+          if (bossCheckpoint) {
+            retryBoss();                 // died in the boss fight: straight back to the boss
+          } else {
+            score = levelStartScore;
+            resetLevel(level);
+            state = S.PLAYING;
+            flap();
+          }
+        }
+        break;
+      case S.WIN:
+        if (endT < 90) break;                                  // let the first moments play
+        if (endT < ENDING_LEN) { endT = ENDING_LEN; break; }   // a press skips to the final picture
+        score = 0;
+        scarfTotal = 0;
+        weapon = null;
+        shieldTimer = 0;
+        resetLevel(0);
+        state = S.READY;
+        break;
+      // CLEAR: input ignored while the banner shows
+    }
+  }
+
+  // Release: a quick tap flaps; a longer hold just keeps the parachute open.
+  function onRelease() {
+    holding = false;
+    if (state === S.PLAYING && holdStart !== null) {
+      if (performance.now() - holdStart < 300) flap();
+      holdStart = null;
+    }
+  }
+
+  // ---------- Drawing ----------
+  function drawCloud(x, y, s) {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.arc(x, y, 18 * s, 0, Math.PI * 2);
+    ctx.arc(x + 20 * s, y - 8 * s, 22 * s, 0, Math.PI * 2);
+    ctx.arc(x + 42 * s, y, 18 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // A knitted scarf band with a fringed end and a fluttering tail
+  function drawPipeScarf(x, top, capH) {
+    const by = top - capH - 8;
+    ctx.fillStyle = '#c0392b';
+    ctx.strokeStyle = '#5a1510';
+    ctx.lineWidth = 2;
+    ctx.fillRect(x - 6, by, PIPE_WIDTH + 12, 12);
+    ctx.strokeRect(x - 6, by, PIPE_WIDTH + 12, 12);
+    ctx.fillStyle = '#f5f0e6';
+    ctx.fillRect(x + 8, by, 4, 12);
+    ctx.fillRect(x + 40, by, 4, 12);
+
+    const tx = x + PIPE_WIDTH + 6;
+    const sway = Math.sin(frame * 0.12) * 5;
+    ctx.fillStyle = '#c0392b';
+    ctx.beginPath();
+    ctx.moveTo(tx - 12, by + 12);
+    ctx.quadraticCurveTo(tx + 6 + sway, by + 26, tx + 4 + sway, by + 44);
+    ctx.lineTo(tx + 12 + sway, by + 42);
+    ctx.quadraticCurveTo(tx + 14 + sway, by + 24, tx, by + 12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#f5f0e6';
+    ctx.fillRect(tx - 10 + sway * 0.3, by + 34, 2, 6);
+  }
+
+  // A scarf fragment floating in the air, fluttering gently
+  function drawScarfFragment(x, y, t) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.sin(t) * 0.15);
+    ctx.shadowColor = '#f5f0e6';
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = '#c0392b';
+    ctx.strokeStyle = '#5a1510';
+    ctx.lineWidth = 2;
+    ctx.fillRect(-18, -6, 36, 12);
+    ctx.strokeRect(-18, -6, 36, 12);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#f5f0e6';
+    ctx.fillRect(-6, -6, 4, 12);
+    ctx.fillRect(8, -6, 4, 12);
+    ctx.strokeStyle = '#c0392b';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-18 + i * 3, 6);
+      ctx.lineTo(-19 + i * 3, 12);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#c0392b';
+    ctx.strokeStyle = '#5a1510';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(18, -6);
+    ctx.bezierCurveTo(28, Math.sin(t * 2) * 3, 34, 8, 26, 18 + Math.sin(t * 2 + 1) * 3);
+    ctx.lineTo(20, 14);
+    ctx.bezierCurveTo(26, 8, 22, 2, 18, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPipe(x, top, gap, scarf) {
+    const capH = 26, capW = PIPE_WIDTH + 10;
+    const bottomY = H - GROUND_HEIGHT;
+    const grad = ctx.createLinearGradient(x, 0, x + PIPE_WIDTH, 0);
+    grad.addColorStop(0, '#4a8a1c');
+    grad.addColorStop(0.5, '#73bf2e');
+    grad.addColorStop(1, '#3d7016');
+    ctx.fillStyle = grad;
+    ctx.strokeStyle = '#2b4f10';
+    ctx.lineWidth = 3;
+
+    ctx.fillRect(x, -3, PIPE_WIDTH, top - capH + 3);
+    ctx.strokeRect(x, -3, PIPE_WIDTH, top - capH + 3);
+    ctx.fillRect(x - 5, top - capH, capW, capH);
+    ctx.strokeRect(x - 5, top - capH, capW, capH);
+
+    const bottomTop = top + gap;
+    ctx.fillRect(x - 5, bottomTop, capW, capH);
+    ctx.strokeRect(x - 5, bottomTop, capW, capH);
+    ctx.fillRect(x, bottomTop + capH, PIPE_WIDTH, bottomY - bottomTop - capH);
+    ctx.strokeRect(x, bottomTop + capH, PIPE_WIDTH, bottomY - bottomTop - capH);
+
+    if (scarf) drawPipeScarf(x, top, capH);
+  }
+
+  function drawPickup(k) {
+    const y = k.y + Math.sin(k.bob) * 6;
+    if (k.type === 'scarf') {
+      drawScarfFragment(k.x, y, frame * 0.1 + k.bob);
+      return;
+    }
+    const color = k.type === 'shield' ? '#6ec6ff' : WEAPONS[k.type].color;
+    const label = k.type === 'shield' ? '+' : (k.type === 'blaster' ? 'B' : 'S');
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(k.x, y, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(k.x, y, 14, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.font = `bold 16px 'Courier New', monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#111';
+    ctx.fillText(label, k.x, y + 1);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawEnemy(e) {
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    if (e.kind === 'bat') {
+      const flap = Math.sin(frame * 0.35 + e.phase) * 0.6;
+      ctx.fillStyle = '#3b2352';
+      ctx.strokeStyle = '#1a0f26';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(-12, 0, 12, 6 + flap * 4, -0.4 + flap, 0, Math.PI * 2);
+      ctx.ellipse(12, 0, 12, 6 + flap * 4, 0.4 - flap, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, 9, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ff4d6d';
+      ctx.beginPath();
+      ctx.arc(-3, -2, 2, 0, Math.PI * 2);
+      ctx.arc(3, -2, 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = '#c0392b';
+      ctx.strokeStyle = '#4a0f0a';
+      ctx.lineWidth = 2;
+      const wing = Math.sin(frame * 0.5 + e.phase) * 5;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 16, 10, 0, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-4, -4);
+      ctx.lineTo(-14, -18 + wing);
+      ctx.lineTo(4, -2);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffd34e';
+      ctx.beginPath();
+      ctx.moveTo(-14, -2);
+      ctx.lineTo(-24, 2);
+      ctx.lineTo(-14, 5);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(-6, -3, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.beginPath();
+      ctx.arc(-7, -3, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawBullet(b) {
+    if (b.pierce) {
+      // The sword's slash: a bright blade with a glow
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.shadowColor = '#cfefff';
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = '#eaf8ff';
+      ctx.beginPath();
+      ctx.moveTo(-18, -3);
+      ctx.lineTo(22, 0);
+      ctx.lineTo(-18, 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+    ctx.save();
+    ctx.shadowColor = b.color;
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawVenom(v) {
+    ctx.save();
+    ctx.shadowColor = '#7CFC00';
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = '#7CFC00';
+    ctx.beginPath();
+    ctx.arc(v.x, v.y, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // The Serpent of the Tubes: a coiled body with scales and spikes, a head with
+  // a jaw that opens and closes, a slit-pupil eye, and a tongue that flicks out.
+  function drawBoss() {
+    const b = boss;
+    const hurt = b.flash > 0;
+    const body = hurt ? '#ffffff' : '#3c7d4f';
+    const belly = hurt ? '#ffffff' : '#c9e8a0';
+    const dark = hurt ? '#eeeeee' : '#1f4a2c';
+    const spike = hurt ? '#ffffff' : '#ffb347';
+
+    // Body: segments trailing to the right, wavy and tapering with distance
+    const segs = [];
+    for (let i = 0; i <= 12; i++) {
+      segs.push({ x: b.x + i * 26, y: b.y + Math.sin(frame * 0.05 + i * 0.6) * (14 + i * 3), r: 22 - i * 1.2 });
+    }
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Outline pass (tail first, so the head ends up on top)
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const s = segs[i];
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r + 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Colour pass: scales, belly stripe and dorsal spikes
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const s = segs[i];
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = belly;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y + s.r * 0.35, s.r * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y - s.r * 0.2, s.r * 0.5, Math.PI * 0.1, Math.PI * 0.9);
+      ctx.stroke();
+      ctx.fillStyle = spike;
+      ctx.strokeStyle = dark;
+      ctx.beginPath();
+      ctx.moveTo(s.x - s.r * 0.4, s.y - s.r + 2);
+      ctx.lineTo(s.x, s.y - s.r - 9);
+      ctx.lineTo(s.x + s.r * 0.4, s.y - s.r + 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Head
+    const hx = b.x, hy = b.y;
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#111';
+
+    // Tongue flicks out now and then
+    if (Math.sin(frame * 0.2) > 0.6) {
+      ctx.strokeStyle = '#e8492b';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(hx - 36, hy + 8);
+      ctx.lineTo(hx - 56, hy + 8);
+      ctx.moveTo(hx - 56, hy + 8);
+      ctx.lineTo(hx - 66, hy + 3);
+      ctx.moveTo(hx - 56, hy + 8);
+      ctx.lineTo(hx - 66, hy + 13);
+      ctx.stroke();
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth = 3;
+    }
+
+    // Skull and head shape
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.ellipse(hx, hy, 36, 27, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Brow ridge
+    ctx.fillStyle = dark;
+    ctx.beginPath();
+    ctx.moveTo(hx - 26, hy - 14);
+    ctx.quadraticCurveTo(hx - 4, hy - 30, hx + 14, hy - 14);
+    ctx.lineTo(hx + 14, hy - 8);
+    ctx.quadraticCurveTo(hx - 4, hy - 22, hx - 26, hy - 6);
+    ctx.closePath();
+    ctx.fill();
+
+    // Mouth: opens and closes, with fangs on the upper and lower jaw
+    const open = 4 + (Math.sin(frame * 0.08) * 0.5 + 0.5) * 12;
+    ctx.fillStyle = '#5a0f1a';
+    ctx.beginPath();
+    ctx.ellipse(hx - 26, hy + 8, 14, open, -0.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.moveTo(hx - 36, hy + 2);
+    ctx.lineTo(hx - 32, hy + 16);
+    ctx.lineTo(hx - 26, hy + 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(hx - 22, hy + 2);
+    ctx.lineTo(hx - 18, hy + 8 + open * 0.6);
+    ctx.lineTo(hx - 14, hy + 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Eye: golden, with a slit pupil that follows the bird
+    const look = clamp((bird.y - b.y) / 80, -1, 1) * 2;
+    ctx.fillStyle = '#ffd34e';
+    ctx.beginPath();
+    ctx.ellipse(hx + 6, hy - 6, 8, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.ellipse(hx + 6 + look * 0.5, hy - 6, 1.8, 5.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Nostrils
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.arc(hx - 30, hy - 8, 1.8, 0, Math.PI * 2);
+    ctx.arc(hx - 24, hy - 12, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBossHP() {
+    const w = 220, x = W / 2 - w / 2, y = 112;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(x - 3, y - 3, w + 6, 14);
+    ctx.fillStyle = '#ff4d6d';
+    ctx.fillRect(x, y, w * (boss.hp / boss.maxHp), 8);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, w, 8);
+  }
+
+  // ---------- Background pictures (no words): the story told in scenes ----------
+  // Each level from 4 onward has a scene that drifts past slowly.
+  function drawBackdrop() {
+    if (level < 3 || level > 8) return;
+    const gy = H - GROUND_HEIGHT;
+    const x = W + 90 - ((levelFrames * 0.6) % (W + 260));
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    if (level === 3) drawEmptyNest(x, gy);        // the silent nest
+    else if (level === 4) drawPawPrints(x, gy);   // tracks leading into the tubes
+    else if (level === 5) drawFeathers(x);        // Pip's feathers drifting
+    else if (level === 6) drawSerpentCoils(x, gy); // the serpent rising
+    else if (level === 7) drawCage(x, gy);        // the hatchlings caged
+    else if (level === 8) drawBrokenChain(x, gy); // a chain broken open
+    ctx.restore();
+  }
+
+  function drawEmptyNest(x, gy, filled) {
+    ctx.fillStyle = '#7a4a24';
+    ctx.beginPath();
+    ctx.ellipse(x, gy - 12, 46, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#4a2c14';
+    ctx.beginPath();
+    ctx.ellipse(x, gy - 18, 34, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Three hollows where the hatchlings should be: empty at first, filled once they return
+    if (filled) {
+      ctx.fillStyle = '#ffd34e';
+      [-22, 0, 22].forEach(dx => {
+        ctx.beginPath();
+        ctx.arc(x + dx, gy - 26, 8, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      return;
+    }
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    [-22, 0, 22].forEach(dx => {
+      ctx.beginPath();
+      ctx.arc(x + dx, gy - 26, 8, 0, Math.PI * 2);
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+  }
+
+  function drawPawPrints(x, gy) {
+    ctx.fillStyle = '#3b2a1a';
+    for (let i = 0; i < 5; i++) {
+      const px = x + i * 36, py = gy - 10 - (i % 2) * 8;
+      ctx.beginPath();
+      ctx.ellipse(px, py, 7, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (const t of [-6, -2, 2, 6]) {
+        ctx.beginPath();
+        ctx.arc(px + t, py - 8, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawFeathers(x) {
+    ctx.fillStyle = '#f5f0e6';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 3; i++) {
+      const fx = x + i * 90;
+      const fy = 170 + i * 70 + Math.sin(frame * 0.03 + i) * 12;
+      ctx.save();
+      ctx.translate(fx, fy);
+      ctx.rotate(-0.6 + Math.sin(frame * 0.02 + i) * 0.2);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 6, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function drawSerpentCoils(x, gy) {
+    ctx.strokeStyle = '#2e5e3a';
+    ctx.lineWidth = 14;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(x + i * 56, gy - 34, 30, Math.PI, Math.PI * 2 + 0.6);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#ffd34e';
+    ctx.beginPath();
+    ctx.arc(x + 118, gy - 70, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawCage(x, gy, freed) {
+    const w = 96, h = 74, top = gy - 14 - h;
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x - w / 2, top, w, h);
+    for (let bx = x - w / 2 + 12; bx < x + w / 2; bx += 14) {
+      ctx.beginPath();
+      ctx.moveTo(bx, top);
+      ctx.lineTo(bx, top + h);
+      ctx.stroke();
+    }
+    if (!freed) {
+      ctx.fillStyle = '#ffd34e';
+      [-26, 0, 26].forEach(dx => {
+        ctx.beginPath();
+        ctx.arc(x + dx, top + h - 18, 8, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+  }
+
+  function drawBrokenChain(x, gy) {
+    ctx.strokeStyle = '#9aa4b0';
+    ctx.lineWidth = 5;
+    for (let i = 0; i < 4; i++) {
+      const cx = x + i * 34, cy = gy - 22;
+      ctx.beginPath();
+      if (i < 3) {
+        ctx.ellipse(cx, cy, 12, 8, 0, 0, Math.PI * 2);
+      } else {
+        // The last link is open: the chain is broken
+        ctx.ellipse(cx, cy, 12, 8, 0, Math.PI * 0.3, Math.PI * 1.7);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // Lights up the gap of the next pipe while the scarf trail is active
+  function drawGuide() {
+    const p = pipes.find(q => !q.passed && q.x + PIPE_WIDTH > BIRD_X);
+    if (!p) return;
+    const pulse = Math.sin(frame * 0.15) * 0.5 + 0.5;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, guideTimer / 40);
+    ctx.fillStyle = `rgba(255,240,160,${0.2 + pulse * 0.25})`;
+    ctx.fillRect(p.x - 4, p.top, PIPE_WIDTH + 8, p.gap);
+    ctx.strokeStyle = '#ffe9a0';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = '#ffe9a0';
+    ctx.shadowBlur = 14;
+    ctx.strokeRect(p.x - 4, p.top, PIPE_WIDTH + 8, p.gap);
+    ctx.restore();
+  }
+
+  function drawGround() {
+    const y = H - GROUND_HEIGHT;
+    ctx.fillStyle = '#ded895';
+    ctx.fillRect(0, y, W, GROUND_HEIGHT);
+    ctx.fillStyle = '#73bf2e';
+    ctx.fillRect(0, y, W, 18);
+    ctx.fillStyle = '#558c22';
+    for (let x = -24 + groundOffset; x < W + 24; x += 24) {
+      ctx.fillRect(x, y + 4, 12, 4);
+    }
+    ctx.fillStyle = '#c9bd72';
+    ctx.fillRect(0, y + 40, W, 4);
+  }
+
+  function drawBird() {
+    ctx.save();
+    ctx.translate(BIRD_X, bird.y);
+    ctx.rotate(bird.rot);
+
+    ctx.fillStyle = '#ffd34e';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, BIRD_RADIUS + 2, BIRD_RADIUS, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = '#f7a13c';
+    const wingY = [-2, 2, -1][bird.wing];
+    ctx.beginPath();
+    ctx.ellipse(-4, wingY, 8, 5, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(6, -5, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#222';
+    ctx.beginPath();
+    ctx.arc(8, -5, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#e8492b';
+    ctx.beginPath();
+    ctx.moveTo(BIRD_RADIUS - 2, -1);
+    ctx.lineTo(BIRD_RADIUS + 8, 3);
+    ctx.lineTo(BIRD_RADIUS - 2, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    if (weapon) {
+      ctx.fillStyle = WEAPONS[weapon.type].color;
+      ctx.strokeStyle = '#222';
+      ctx.fillRect(6, 4, 14, 5);
+      ctx.strokeRect(6, 4, 14, 5);
+    }
+    ctx.restore();
+
+    // Shield aura (blinks when about to expire)
+    if (shieldTimer > 0 && (shieldTimer > 120 || Math.floor(frame / 6) % 2 === 0)) {
+      ctx.save();
+      ctx.strokeStyle = '#6ec6ff';
+      ctx.lineWidth = 3;
+      ctx.shadowColor = '#6ec6ff';
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(BIRD_X, bird.y, 24, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function drawText(text, x, y, size, color = '#fff') {
+    ctx.font = `bold ${size}px 'Courier New', monospace`;
+    ctx.textAlign = 'center';
+    ctx.lineWidth = Math.max(4, size / 6);
+    ctx.strokeStyle = '#333';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  }
+
+  function drawPanel(y, h) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(40, y, W - 80, h);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(40, y, W - 80, h);
+  }
+
+  function drawPlayingHUD() {
+    const L = LEVELS[level];
+    drawText(String(score), W / 2, 90, 56);
+
+    ctx.font = `bold 14px 'Courier New', monospace`;
+    ctx.textAlign = 'left';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#333';
+    ctx.strokeText(`LV ${level + 1}`, 12, 24);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`LV ${level + 1}`, 12, 24);
+
+    const bx = 12, by = 34, bw = 120, bh = 8;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = '#7CFC00';
+    ctx.fillRect(bx, by, bw * (passed / L.pipes), bh);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.font = `bold 13px 'Courier New', monospace`;
+    ctx.lineWidth = 3;
+    if (weapon) {
+      const w = WEAPONS[weapon.type];
+      const secs = Math.ceil(weapon.timer / 60);
+      ctx.strokeStyle = '#333';
+      ctx.strokeText(`${w.name} ${secs}s`, 12, 62);
+      ctx.fillStyle = w.color;
+      ctx.fillText(`${w.name} ${secs}s`, 12, 62);
+    }
+    if (shieldTimer > 0) {
+      const y = weapon ? 80 : 62;
+      const secs = Math.ceil(shieldTimer / 60);
+      ctx.strokeStyle = '#333';
+      ctx.strokeText(`SHIELD ${secs}s`, 12, y);
+      ctx.fillStyle = '#6ec6ff';
+      ctx.fillText(`SHIELD ${secs}s`, 12, y);
+    }
+
+    // Parachute stamina bar
+    const sy = 94;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(12, sy, 120, 6);
+    ctx.fillStyle = stamina > 40 ? '#ffd34e' : '#ff6b6b';
+    ctx.fillRect(12, sy, 120 * (stamina / STAMINA_MAX), 6);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(12, sy, 120, 6);
+
+    // Family bond meter (filled by scarves)
+    const bx2 = W - 92, by2 = 40;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(bx2, by2, 80, 6);
+    ctx.fillStyle = '#c0392b';
+    ctx.fillRect(bx2, by2, 80 * (bond / 2), 6);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx2, by2, 80, 6);
+
+    ctx.textAlign = 'right';
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 3;
+    ctx.strokeText(`${passed}/${L.pipes}`, W - 12, 24);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`${passed}/${L.pipes}`, W - 12, 24);
+  }
+
+  // The ending's birds use the hero's design (wing, eye, beak), recoloured and scaled
+  function drawMiniBird(x, y, color, r) {
+    const k = r / BIRD_RADIUS;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(k, k);
+    ctx.lineWidth = 2 / k;
+    ctx.strokeStyle = '#333';
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, BIRD_RADIUS + 2, BIRD_RADIUS, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Wing, flapping gently
+    const wingY = [-2, 2, -1][(frame >> 3) % 3];
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath();
+    ctx.ellipse(-4, wingY, 8, 5, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Eye
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(6, -5, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#222';
+    ctx.beginPath();
+    ctx.arc(8, -5, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Beak
+    ctx.fillStyle = '#e8492b';
+    ctx.beginPath();
+    ctx.moveTo(BIRD_RADIUS - 2, -1);
+    ctx.lineTo(BIRD_RADIUS + 8, 3);
+    ctx.lineTo(BIRD_RADIUS - 2, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawReady() {
+    if (pastGlories && level === 0 && score === 0) {
+      drawText('PAST GLORIES: 1-0 level | B boss | V ending', W / 2, 578, 13, '#ffd34e');
+    }
+    if (level === 0 && score === 0) drawText("FLAPPY'S VENGEANCE", W / 2, 150, 30, '#ffd34e');
+    drawText(`LEVEL ${level + 1}`, W / 2, 215, 30);
+
+    // Difficulty dots (no words needed)
+    const d = Math.ceil((level + 1) / 2);
+    for (let i = 0; i < 5; i++) {
+      ctx.beginPath();
+      ctx.arc(W / 2 - 40 + i * 20, 245, 6, 0, Math.PI * 2);
+      ctx.fillStyle = i < d ? '#ff6b6b' : 'rgba(255,255,255,0.35)';
+      ctx.fill();
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // The boss's shadow over the final level
+    if (level === LEVELS.length - 1) {
+      ctx.fillStyle = 'rgba(60,125,79,0.8)';
+      ctx.beginPath();
+      ctx.ellipse(W / 2, 300, 34, 22, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffd34e';
+      ctx.beginPath();
+      ctx.arc(W / 2 - 12, 294, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const blink = Math.floor(performance.now() / 500) % 2;
+    if (blink) drawText('Tap / SPACE to fly', W / 2, 340, 16);
+  }
+
+  function drawClear() {
+    drawPanel(190, 150);
+    drawText(`LEVEL ${level + 1} CLEAR!`, W / 2, 250, 26, '#7CFC00');
+    drawText(`Score: ${score}`, W / 2, 290, 20);
+    drawText(`Next: LEVEL ${level + 2}`, W / 2, 322, 14, '#ffd34e');
+  }
+
+  const AD_BTN = { x: 80, y: 440, w: 240, h: 44 };
+  const inBox = (p, b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+
+  function drawGameOver() {
+    drawPanel(170, 260);
+    drawText('GAME OVER', W / 2, 220, 36, '#ff6b6b');
+    drawText(`Level ${level + 1}`, W / 2, 255, 20);
+    drawText('Score: ' + score, W / 2, 285, 24);
+    drawText('Best: ' + best, W / 2, 317, 24, '#ffd34e');
+    if (score >= best && score > 0) drawText('NEW BEST!', W / 2, 350, 18, '#7CFC00');
+    if (performance.now() - deathTime > 600) {
+      const blink = Math.floor(performance.now() / 400) % 2;
+      if (blink) drawText(`Tap to retry LEVEL ${level + 1}`, W / 2, 400, 14);
+    }
+    if (canRevive && YT && YT.ads && !adBusy) {
+      ctx.fillStyle = '#ffd34e';
+      ctx.fillRect(AD_BTN.x, AD_BTN.y, AD_BTN.w, AD_BTN.h);
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(AD_BTN.x, AD_BTN.y, AD_BTN.w, AD_BTN.h);
+      drawText('CONTINUE WITH AD', W / 2, AD_BTN.y + 28, 15);
+    }
+  }
+
+  // Ending told with pictures only: sunrise over the tubes, the family home in the nest
+  // ---------- Ending: the serpent falls, the dawn comes, the family is reunited ----------
+  const easeOutC = t => 1 - Math.pow(1 - t, 3);
+  const mix = (a, b, t) => a + (b - a) * t;
+  const SCARF_SEGS = 12;
+
+  function drawHeart(x, y, s) {
+    ctx.fillStyle = '#ff4d6d';
+    ctx.beginPath();
+    ctx.moveTo(x, y + s * 0.3);
+    ctx.bezierCurveTo(x - s, y - s * 0.6, x - s * 0.5, y - s * 1.2, x, y - s * 0.4);
+    ctx.bezierCurveTo(x + s * 0.5, y - s * 1.2, x + s, y - s * 0.6, x, y + s * 0.3);
+    ctx.fill();
+  }
+
+  // The scarf: a loop around Gilmore's neck, a strand hanging between, and a loop around Mabel's
+  function scarfPath(cheer) {
+    const gx = W / 2 - 18, mx = W / 2 + 18, ny = 452 - cheer;
+    const pts = [];
+    for (let i = 0; i <= 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      pts.push({ x: gx + 12 * Math.cos(a), y: ny + 5 * Math.sin(a) });
+    }
+    for (let i = 1; i < 8; i++) {
+      const u = i / 8;
+      pts.push({ x: mix(gx + 12, mx - 12, u), y: ny + 12 * Math.sin(Math.PI * u) });
+    }
+    for (let i = 0; i <= 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      pts.push({ x: mx + 12 * Math.cos(a), y: ny + 5 * Math.sin(a) });
+    }
+    return pts;
+  }
+
+  // Draws a bird with its own position, tilt and facing direction
+  function drawBirdAt(x, y, color, r, rot, mirror) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    if (mirror) ctx.scale(-1, 1);
+    drawMiniBird(0, 0, color, r);
+    ctx.restore();
+  }
+
+  function drawWin() {
+    const t = endT;
+    const fade = clamp((t - 150) / 60, 0, 1);   // the dawn fades in over the arena
+    if (fade <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.lineCap = 'round';
+
+    // Dawn sky and a sun that climbs
+    const sky = ctx.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#2b2d6e');
+    sky.addColorStop(0.55, '#f28c6b');
+    sky.addColorStop(1, '#ffd9a0');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, H);
+
+    const sunY = mix(640, 280, easeOutC(clamp((t - 200) / 300, 0, 1)));
+    const glow = ctx.createRadialGradient(W / 2, sunY, 20, W / 2, sunY, 170);
+    glow.addColorStop(0, 'rgba(255,224,138,0.9)');
+    glow.addColorStop(1, 'rgba(255,179,71,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(W / 2, sunY, 170, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffd34e';
+    ctx.beginPath();
+    ctx.arc(W / 2, sunY, 80, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Hill with the nest on top
+    ctx.fillStyle = '#3f7d3a';
+    ctx.beginPath();
+    ctx.ellipse(W / 2, 600, 280, 135, 0, 0, Math.PI * 2);
+    ctx.fill();
+    drawEmptyNest(W / 2, 480, t > 440);   // the hollows fill once the hatchlings return
+
+    // Mabel waits in the nest; they cheer, then Gilmore leans in to kiss her
+    const cheer = t > 420 ? Math.abs(Math.sin((t - 420) * 0.12)) * 10 * Math.exp(-(t - 420) / 150) : 0;
+    const kiss = easeOutC(clamp((t - 460) / 30, 0, 1));
+    const tilt = 0.25 * kiss;
+    drawBirdAt(W / 2 + 18, 440 - cheer, '#ff8fb1', 14, tilt, true);
+
+    // Gilmore swoops in from the right, lands, then glides over to Mabel
+    if (t >= 260) {
+      let gx, gy;
+      if (t < 420) {
+        const f = clamp((t - 260) / 160, 0, 1), e = easeOutC(f);
+        gx = mix(W + 40, W / 2 - 30, e);
+        gy = mix(190, 440, e) - Math.sin(f * Math.PI) * 50;
+      } else {
+        gx = mix(W / 2 - 30, W / 2 - 18, easeOutC(clamp((t - 420) / 50, 0, 1)));
+        gy = 440 - cheer;
+      }
+      drawBirdAt(gx, gy, '#ffd34e', 14, tilt, false);
+    }
+
+    // Hearts rise from the kiss
+    if (t >= 470) {
+      for (let k = 0; k < 5; k++) {
+        const life = t - (480 + k * 22);
+        if (life < 0 || life > 110) continue;
+        ctx.save();
+        ctx.globalAlpha = fade * (1 - life / 110);
+        drawHeart(W / 2 + Math.sin(k * 1.7) * 16, 420 - life * 0.7, 6);
+        ctx.restore();
+      }
+    }
+
+    // The scarf fragments knit together, one segment at a time, around both necks
+    const have = Math.min(scarfTotal, SCARF_SEGS);
+    const path = scarfPath(cheer);
+    const N = path.length - 1;
+    for (let i = 0; i < SCARF_SEGS; i++) {
+      const missing = i >= have;
+      const knit = 480 + i * 6;
+      if (!missing && t < knit) continue;
+      if (missing && t < 470) continue;
+      const from = Math.floor((i * N) / SCARF_SEGS), to = Math.floor(((i + 1) * N) / SCARF_SEGS);
+      ctx.lineWidth = 7;
+      ctx.strokeStyle = missing ? 'rgba(255,255,255,0.5)' : (i % 2 ? '#f5f0e6' : '#c0392b');
+      ctx.setLineDash(missing ? [3, 4] : []);
+      ctx.beginPath();
+      ctx.moveTo(path[from].x, path[from].y);
+      for (let j = from + 1; j <= to; j++) ctx.lineTo(path[j].x, path[j].y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // A fringed tail hangs from Mabel's neck and flutters once the scarf is whole
+    if (have >= SCARF_SEGS && t >= 552) {
+      const end = path[path.length - 1], sway = Math.sin(frame * 0.1) * 3;
+      ctx.strokeStyle = '#c0392b';
+      ctx.lineWidth = 2;
+      for (let k = 0; k < 3; k++) {
+        ctx.beginPath();
+        ctx.moveTo(end.x - 2 + k * 2, end.y);
+        ctx.lineTo(end.x + 2 + k * 3 + sway, end.y + 16 + k * 2);
+        ctx.stroke();
+      }
+    }
+
+    // The kids hop out of the nest and play on the hill (drawn last, so nothing covers them)
+    const PLAY_X = W / 2, PLAY_Y = 500;
+    const KID_COLS = ['#fff3b0', '#ffd0e0', '#c8f0d0'];
+    const playPos = (tt, i) => {
+      const th = (tt - 540) * 0.045 + i * 2.1;
+      return { x: PLAY_X + Math.cos(th) * (60 + i * 16), y: PLAY_Y + Math.sin(th) * 14 };
+    };
+    [-22, 0, 22].forEach((dx, i) => {
+      if (t < 440 + i * 30) return;          // not hatched yet
+      const nestX = W / 2 + dx, nestY = 458;
+      const hopStart = 500 + i * 15;
+      if (t < hopStart) {                     // peeking out of the nest
+        drawBirdAt(nestX, nestY - Math.abs(Math.sin(t * 0.1 + i)) * 2, KID_COLS[i], 7, 0, false);
+        return;
+      }
+      const landing = playPos(hopStart + 40, i);
+      if (t < hopStart + 40) {                // a happy hop out of the nest
+        const p = (t - hopStart) / 40;
+        const x = mix(nestX, landing.x, p);
+        const y = mix(nestY, landing.y, p) - Math.sin(p * Math.PI) * 50;
+        drawBirdAt(x, y, KID_COLS[i], 7, Math.sin(p * Math.PI) * 0.4, false);
+        return;
+      }
+      // Chasing each other round in a circle, bouncing as they go
+      const pos = playPos(t, i);
+      const bob = Math.sin((t - hopStart) * 0.2);
+      drawBirdAt(pos.x, pos.y - Math.abs(bob) * 8, KID_COLS[i], 7, bob * 0.2, false);
+    });
+
+    // Replay of the story's scenes at the top, each now resolved with a heart
+    const PS = 84;
+    const scenes = [
+      () => drawEmptyNest(0, 150, true),
+      () => drawPawPrints(-72, 150),
+      () => drawCage(0, 150, true),
+      () => drawBrokenChain(-51, 150)
+    ];
+    scenes.forEach((draw, i) => {
+      const start = 600 + i * 45;
+      if (t < start) return;
+      const px = 22 + i * 92, py = 30;
+      const a = clamp((t - start) / 20, 0, 1);
+      ctx.save();
+      ctx.globalAlpha = fade * a * 0.9;
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.fillRect(px, py, PS, PS);
+      ctx.beginPath();
+      ctx.rect(px, py, PS, PS);
+      ctx.clip();
+      ctx.translate(px + PS / 2, py);
+      ctx.scale(0.45, 0.45);
+      draw();
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = fade * a;
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(px, py, PS, PS);
+      drawHeart(px + PS - 14, py + 14, 6);
+      ctx.restore();
+    });
+
+    // Score and best, numbers only
+    if (t >= 700) {
+      ctx.globalAlpha = fade * clamp((t - 700) / 40, 0, 1);
+      drawText('Score: ' + score, W / 2, 548, 22);
+      drawText('Best: ' + best, W / 2, 580, 22, '#ffd34e');
+    }
+    if (t > 760 && Math.floor(performance.now() / 400) % 2 === 0) {
+      ctx.globalAlpha = fade;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(W / 2, 594, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function render() {
+    const L = LEVELS[level];
+    ctx.save();
+    if (shakeTime > 0) {
+      ctx.translate((Math.random() - 0.5) * shakeTime, (Math.random() - 0.5) * shakeTime);
+    }
+
+    const sky = ctx.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, L.sky[0]);
+    sky.addColorStop(1, L.sky[1]);
+    ctx.fillStyle = sky;
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+
+    for (const c of clouds) drawCloud(c.x, c.y, c.s);
+    drawBackdrop();
+    for (const p of pipes) drawPipe(p.x, p.top, p.gap, p.scarf);
+    if (guideTimer > 0) drawGuide();
+    drawGround();
+
+    for (const k of pickups) drawPickup(k);
+    for (const e of enemies) drawEnemy(e);
+    for (const v of venom) drawVenom(v);
+    if (boss) { ctx.globalAlpha = boss.alpha ?? 1; drawBoss(); ctx.globalAlpha = 1; }
+    for (const b of bullets) drawBullet(b);
+
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0, p.life / 40);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x, p.y, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+
+    drawBird();
+
+    if (state === S.PLAYING) {
+      drawPlayingHUD();
+      if (boss) drawBossHP();
+    }
+    if (state === S.READY) drawReady();
+    if (state === S.CLEAR) drawClear();
+    if (state === S.DEAD) drawGameOver();
+    if (state === S.WIN) drawWin();
+
+    if (flashAlpha > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+    ctx.restore();
+  }
+
+  function loop() {
+    if (loaded) { update(); render(); } else { drawLoading(); }
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function drawLoading() {
+    ctx.fillStyle = '#70c5ce';
+    ctx.fillRect(0, 0, W, H);
+    drawText('LOADING', W / 2, H / 2, 26);
+  }
+
+  // Restart the boss fight from the checkpoint with a fresh serpent
+  function retryBoss() {
+    score = bossCheckpoint.score;
+    weapon = null;
+    shieldTimer = 0;
+    bond = 0;
+    guideTimer = 0;
+    holding = false;
+    spawned = LEVELS[level].pipes;   // skip the pipes: they are already behind the checkpoint
+    passed = LEVELS[level].pipes;
+    pipes = [];
+    enemies = [];
+    bullets = [];
+    pickups = [];
+    venom = [];
+    boss = null;
+    invuln = 0;
+    fireCd = 0;
+    stamina = STAMINA_MAX;
+    bird = { y: H / 2 - 60, vy: 0, rot: 0, wing: 0 };
+    startBoss();
+    state = S.PLAYING;
+    flap();
+  }
+
+  // ---------- Dev helper: jump straight to a level ----------
+  function devJump(idx) {
+    ensureAudio();
+    score = 0;
+    weapon = null;
+    shieldTimer = 0;
+    bond = 0;
+    scarfTotal = 0;
+    guideTimer = 0;
+    resetLevel(idx);
+    state = S.READY;
+  }
+
+  // Dev helper: go straight to the boss fight on level 10 (B)
+  function devBoss() {
+    devJump(LEVELS.length - 1);
+    spawned = LEVELS[level].pipes;   // all pipes are considered already passed
+    pipes = [];
+    startBoss();
+    state = S.READY;
+  }
+
+  // Dev helper: watch the ending right away (V)
+  function devEnding() {
+    devJump(LEVELS.length - 1);
+    spawned = LEVELS[level].pipes;
+    passed = LEVELS[level].pipes;
+    pipes = [];
+    startBoss();
+    scarfTotal = SCARF_SEGS;   // a full scarf
+    score = 25;
+    defeatBoss();
+  }
+
+  // ---------- Input listeners ----------
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyM') {
+      ensureAudio();
+      toggleSound();
+      return;
+    }
+    if (pastGlories && /^Digit[0-9]$/.test(e.code)) {
+      const n = e.code === 'Digit0' ? 10 : parseInt(e.code.slice(5), 10);
+      if (n >= 1 && n <= LEVELS.length) devJump(n - 1);
+      return;
+    }
+    if (pastGlories && e.code === 'KeyB') {
+      devBoss();
+      return;
+    }
+    if (pastGlories && e.code === 'KeyV') {
+      devEnding();
+      return;
+    }
+    if (e.code === 'Space' || e.code === 'ArrowUp') {
+      e.preventDefault();
+      if (!e.repeat) { holding = true; pointer = null; onPress(); }
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.code === 'Space' || e.code === 'ArrowUp') onRelease();
+  });
+  canvas.addEventListener('mousedown', (e) => { e.preventDefault(); setPointer(e); holding = true; onPress(); });
+  window.addEventListener('mouseup', () => { onRelease(); });
+  canvas.addEventListener('touchstart', (e) => { e.preventDefault(); setPointer(e); holding = true; onPress(); }, { passive: false });
+  window.addEventListener('touchend', () => { onRelease(); });
+  window.addEventListener('touchcancel', () => { onRelease(); });
+
+  // ---------- YouTube Playables ----------
+  function setPointer(e) {
+    const r = canvas.getBoundingClientRect();
+    const p = e.touches ? e.touches[0] : e;
+    pointer = { x: (p.clientX - r.left) * W / r.width, y: (p.clientY - r.top) * H / r.height };
+  }
+
+  // Save progress to the cloud (only once it has loaded, so a fresh start never overwrites it)
+  function saveProgress(sendBest) {
+    if (!YT || !loaded) return;
+    YT.game.saveData(JSON.stringify({ best, won })).catch(() => {});
+    if (sendBest && best > 0) YT.engagement.sendScore({ value: best }).catch(() => {});
+  }
+
+  function applySave(raw) {
+    try {
+      const d = JSON.parse(raw || '{}');
+      if (typeof d.best === 'number' && d.best > best) best = d.best;
+      if (d.won) { won = true; pastGlories = true; }
+    } catch (e) {}
+  }
+
+  // Keep the sound in step with YouTube's setting and with pausing
+  function syncAudio() {
+    if (!actx) return;
+    if (soundAllowed()) { if (actx.state !== 'running') actx.resume().catch(() => {}); }
+    else if (actx.state === 'running') actx.suspend().catch(() => {});
+  }
+
+  // Rewarded continue: after an ad completes, the bird comes back where it fell
+  function watchAdToRevive() {
+    adBusy = true;
+    YT.ads.requestRewardedAd('revive-after-death-v1')
+      .then(earned => { adBusy = false; if (earned && state === S.DEAD) revive(); })
+      .catch(() => { adBusy = false; });
+  }
+
+  function revive() {
+    canRevive = false;
+    state = S.PLAYING;
+    bird.y = H / 2 - 60;
+    bird.vy = 0;
+    bird.rot = 0;
+    holding = false;
+    holdStart = null;
+    invuln = 180;              // three seconds to get clear of the pipes
+    setTrack(boss ? 'boss' : level);
+    flap();
+  }
+
+  if (YT) {
+    YT.game.firstFrameReady();
+    ytAudio = YT.system.isAudioEnabled();
+    YT.system.onAudioEnabledChange(on => { ytAudio = on; syncAudio(); });
+    YT.system.onPause(() => { appPaused = true; cancelAnimationFrame(rafId); rafId = 0; saveProgress(false); syncAudio(); });
+    YT.system.onResume(() => { appPaused = false; syncAudio(); if (!rafId) rafId = requestAnimationFrame(loop); });
+    YT.game.loadData()
+      .then(applySave)
+      .catch(() => {})
+      .then(() => { loaded = true; YT.game.gameReady(); });
+  }
+
+  resetLevel(0);
+  state = S.READY;
+  initClouds();
+  loop();
+})();
+</script>
+</body>
+</html>
