@@ -1646,13 +1646,41 @@
   const AD_BTN = { x: 80, y: 440, w: 240, h: 44 };
   const inBox = (p, b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
 
+  // The game-over panel and its fixed text are painted once onto a cached layer,
+  // then reused each frame. Only the blinking prompt and the ad button are drawn live.
+  const goLayer = document.createElement('canvas');
+  goLayer.width = W * dpr;
+  goLayer.height = H * dpr;
+  const gctx = goLayer.getContext('2d');
+  gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  let goKey = '';
+  function paintGameOverLayer() {
+    gctx.clearRect(0, 0, W, H);
+    gctx.fillStyle = 'rgba(0,0,0,0.45)';
+    gctx.fillRect(40, 170, W - 80, 260);
+    gctx.strokeStyle = '#fff';
+    gctx.lineWidth = 3;
+    gctx.strokeRect(40, 170, W - 80, 260);
+    const text = (t, x, y, size, color = '#fff') => {
+      gctx.font = `bold ${size}px 'Courier New', monospace`;
+      gctx.textAlign = 'center';
+      gctx.lineWidth = Math.max(4, size / 6);
+      gctx.strokeStyle = '#333';
+      gctx.strokeText(t, x, y);
+      gctx.fillStyle = color;
+      gctx.fillText(t, x, y);
+    };
+    text('GAME OVER', W / 2, 220, 36, '#ff6b6b');
+    text(`Level ${level + 1}`, W / 2, 255, 20);
+    text('Score: ' + score, W / 2, 285, 24);
+    text('Best: ' + best, W / 2, 317, 24, '#ffd34e');
+    if (score >= best && score > 0) text('NEW BEST!', W / 2, 350, 18, '#7CFC00');
+  }
+
   function drawGameOver() {
-    drawPanel(170, 260);
-    drawText('GAME OVER', W / 2, 220, 36, '#ff6b6b');
-    drawText(`Level ${level + 1}`, W / 2, 255, 20);
-    drawText('Score: ' + score, W / 2, 285, 24);
-    drawText('Best: ' + best, W / 2, 317, 24, '#ffd34e');
-    if (score >= best && score > 0) drawText('NEW BEST!', W / 2, 350, 18, '#7CFC00');
+    const key = level + '|' + score + '|' + best;
+    if (key !== goKey) { paintGameOverLayer(); goKey = key; }
+    ctx.drawImage(goLayer, 0, 0, W, H);
     if (performance.now() - deathTime > 600) {
       const blink = Math.floor(performance.now() / 400) % 2;
       if (blink) drawText(`Tap to retry LEVEL ${level + 1}`, W / 2, 400, 14);
@@ -1951,7 +1979,7 @@
     const recent = perf.log.slice(-4).map(s => s).join('\n');
     const avgFall = perf.fallFrames ? (perf.fallGapSum / perf.fallFrames).toFixed(1) : '-';
     perfText.textContent =
-      'frames: ' + perf.frames + '   missed (>25ms): ' + perf.missed + '   slow (>50ms): ' + perf.slow + '\n' +
+      'frames: ' + perf.frames + '   missed (>12ms): ' + perf.missed + '   slow (>50ms): ' + perf.slow + '\n' +
       'avg frame gap while falling: ' + avgFall + ' ms (' + perf.fallFrames + ' frames)\n' +
       'worst frame: ' + perf.worst.toFixed(0) + ' ms (' + perf.worstState + ')\n' +
       'longest update: ' + perf.updMax.toFixed(1) + ' ms   render: ' + perf.rndMax.toFixed(1) + ' ms' +
@@ -1962,7 +1990,7 @@
       const gap = now - perf.last;
       perf.frames++;
       if (gap > perf.worst) { perf.worst = gap; perf.worstState = ['READY','PLAYING','CLEAR','DEAD','WIN'][state]; }
-      if (gap > 25) perf.missed++;
+      if (gap > 12) perf.missed++;   // 60 Hz drops show as ~17 ms gaps on a 120 Hz phone
       if (state === S.PLAYING && bird.vy > 0) { perf.fallGapSum += gap; perf.fallFrames++; }
       if (gap > 50) {
         perf.slow++;
