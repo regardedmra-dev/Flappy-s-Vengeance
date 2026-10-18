@@ -35,6 +35,7 @@
 </head>
 <body>
 <canvas id="game" width="400" height="600"></canvas>
+<div id="perf" style="color:#ddd;font:11px monospace;margin-top:8px;white-space:pre;text-align:left;width:min(calc(100vw - 16px), calc((100vh - 16px) * 2 / 3))"><span id="perftext">timing: starting...</span></div>
 
 <script>
 (() => {
@@ -1943,8 +1944,38 @@
     ctx.restore();
   }
 
-  function loop() {
-    if (loaded) { update(); render(); } else { drawLoading(); }
+  // ---------- Temporary frame-timing readout (remove after debugging) ----------
+  const perfText = document.getElementById('perftext');
+  const perf = { last: 0, frames: 0, slow: 0, worst: 0, worstState: '-', worstVy: 0, fallSlow: 0, updMax: 0, rndMax: 0, log: [] };
+  setInterval(() => {
+    const recent = perf.log.slice(-4).map(s => s).join('\n');
+    perfText.textContent =
+      'frames: ' + perf.frames + '   slow (>50ms): ' + perf.slow + '\n' +
+      'worst frame: ' + perf.worst.toFixed(0) + ' ms (' + perf.worstState + ')\n' +
+      'slow frames while falling: ' + perf.fallSlow + '\n' +
+      'longest update: ' + perf.updMax.toFixed(1) + ' ms   render: ' + perf.rndMax.toFixed(1) + ' ms' +
+      (recent ? '\nrecent:\n' + recent : '');
+  }, 500);
+  function loop(now) {
+    if (perf.last) {
+      const gap = now - perf.last;
+      perf.frames++;
+      if (gap > perf.worst) { perf.worst = gap; perf.worstState = ['READY','PLAYING','CLEAR','DEAD','WIN'][state]; }
+      if (gap > 50) {
+        perf.slow++;
+        if (state === S.PLAYING && bird.vy > 0) perf.fallSlow++;
+        perf.log.push(gap.toFixed(0) + ' ms, ' + ['READY','PLAYING','CLEAR','DEAD','WIN'][state] + ', vy ' + bird.vy.toFixed(1));
+        if (perf.log.length > 20) perf.log.shift();
+      }
+    }
+    perf.last = now;
+    const t0 = performance.now();
+    if (loaded) { update(); }
+    const t1 = performance.now();
+    if (loaded) { render(); } else { drawLoading(); }
+    const t2 = performance.now();
+    perf.updMax = Math.max(perf.updMax * 0.99, t1 - t0);
+    perf.rndMax = Math.max(perf.rndMax * 0.99, t2 - t1);
     rafId = requestAnimationFrame(loop);
   }
 
