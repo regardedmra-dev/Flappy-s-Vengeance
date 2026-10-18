@@ -997,28 +997,52 @@
     ctx.restore();
   }
 
+  // Pipe pieces are painted once onto small tiles. Each frame the tiles are
+  // stretched into place, which avoids building gradients and outlines per pipe.
+  function makePipeTile(w, h, padX, padY, paint) {
+    const c = document.createElement('canvas');
+    c.width = Math.ceil((w + 2 * padX) * dpr);
+    c.height = Math.ceil((h + 2 * padY) * dpr);
+    const t = c.getContext('2d');
+    t.setTransform(dpr, 0, 0, dpr, padX * dpr, padY * dpr);
+    paint(t);
+    return c;
+  }
+  const PIPE_CAP_H = 26, PIPE_CAP_W = PIPE_WIDTH + 10;
+  const PIPE_BODY_TILE = makePipeTile(PIPE_WIDTH, 8, 2, 0, (t) => {
+    const g = t.createLinearGradient(0, 0, PIPE_WIDTH, 0);
+    g.addColorStop(0, '#4a8a1c');
+    g.addColorStop(0.5, '#73bf2e');
+    g.addColorStop(1, '#3d7016');
+    t.fillStyle = g;
+    t.fillRect(0, 0, PIPE_WIDTH, 8);
+    t.strokeStyle = '#2b4f10';
+    t.lineWidth = 3;
+    t.beginPath();
+    t.moveTo(0, 0); t.lineTo(0, 8);
+    t.moveTo(PIPE_WIDTH, 0); t.lineTo(PIPE_WIDTH, 8);
+    t.stroke();
+  });
+  const PIPE_CAP_TILE = makePipeTile(PIPE_CAP_W, PIPE_CAP_H, 2, 2, (t) => {
+    const g = t.createLinearGradient(5, 0, 5 + PIPE_WIDTH, 0);
+    g.addColorStop(0, '#4a8a1c');
+    g.addColorStop(0.5, '#73bf2e');
+    g.addColorStop(1, '#3d7016');
+    t.fillStyle = g;
+    t.fillRect(0, 0, PIPE_CAP_W, PIPE_CAP_H);
+    t.strokeStyle = '#2b4f10';
+    t.lineWidth = 3;
+    t.strokeRect(0, 0, PIPE_CAP_W, PIPE_CAP_H);
+  });
+
   function drawPipe(x, top, gap, scarf) {
-    const capH = 26, capW = PIPE_WIDTH + 10;
+    const capH = PIPE_CAP_H;
     const bottomY = H - GROUND_HEIGHT;
-    const grad = ctx.createLinearGradient(x, 0, x + PIPE_WIDTH, 0);
-    grad.addColorStop(0, '#4a8a1c');
-    grad.addColorStop(0.5, '#73bf2e');
-    grad.addColorStop(1, '#3d7016');
-    ctx.fillStyle = grad;
-    ctx.strokeStyle = '#2b4f10';
-    ctx.lineWidth = 3;
-
-    ctx.fillRect(x, -3, PIPE_WIDTH, top - capH + 3);
-    ctx.strokeRect(x, -3, PIPE_WIDTH, top - capH + 3);
-    ctx.fillRect(x - 5, top - capH, capW, capH);
-    ctx.strokeRect(x - 5, top - capH, capW, capH);
-
     const bottomTop = top + gap;
-    ctx.fillRect(x - 5, bottomTop, capW, capH);
-    ctx.strokeRect(x - 5, bottomTop, capW, capH);
-    ctx.fillRect(x, bottomTop + capH, PIPE_WIDTH, bottomY - bottomTop - capH);
-    ctx.strokeRect(x, bottomTop + capH, PIPE_WIDTH, bottomY - bottomTop - capH);
-
+    ctx.drawImage(PIPE_BODY_TILE, x - 2, -3, PIPE_WIDTH + 4, Math.max(0, top - capH + 3));
+    ctx.drawImage(PIPE_CAP_TILE, x - 7, top - capH - 2, PIPE_CAP_W + 4, capH + 4);
+    ctx.drawImage(PIPE_CAP_TILE, x - 7, bottomTop - 2, PIPE_CAP_W + 4, capH + 4);
+    ctx.drawImage(PIPE_BODY_TILE, x - 2, bottomTop + capH, PIPE_WIDTH + 4, Math.max(0, bottomY - bottomTop - capH));
     if (scarf) drawPipeScarf(x, top, capH);
   }
 
