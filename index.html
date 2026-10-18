@@ -1938,17 +1938,9 @@
     ctx.restore();
   }
 
-  // Game logic runs at a fixed 60 steps per second, so speed does not depend on
-  // the screen's refresh rate (90 or 120 Hz phones) or on dropped frames.
-  const STEP = 1000 / 60;
-  let accumulator = 0, lastTime = 0;
-  function loop(now) {
+  function loop() {
+    if (loaded) { update(); render(); } else { drawLoading(); }
     rafId = requestAnimationFrame(loop);
-    if (!loaded) { drawLoading(); lastTime = now; return; }
-    accumulator += Math.min(now - lastTime, 100);   // cap after long stalls
-    lastTime = now;
-    while (accumulator >= STEP) { update(); accumulator -= STEP; }
-    render();
   }
 
   function drawLoading() {
