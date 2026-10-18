@@ -29,6 +29,8 @@
     height: auto;
     aspect-ratio: 2 / 3;
   }
+  /* A shadow under a constantly redrawn canvas is costly on phones */
+  @media (pointer: coarse) { canvas { box-shadow: none; } }
 </style>
 </head>
 <body>
@@ -42,7 +44,7 @@
   // Phones are slower: cap the pixel density and skip the costly glow effects there.
   const FAST = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const SHADOW = !FAST;
-  const dpr = Math.min(window.devicePixelRatio || 1, FAST ? 2 : 3);
+  const dpr = Math.min(window.devicePixelRatio || 1, FAST ? 1.5 : 3);
   canvas.width = W * dpr;
   canvas.height = H * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
