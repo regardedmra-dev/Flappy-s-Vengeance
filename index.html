@@ -1888,6 +1888,8 @@
     ctx.restore();
   }
 
+  // The sky gradient only changes between levels, so build it once per level
+  let skyGrad = null, skyLevel = -1;
   function render() {
     const L = LEVELS[level];
     ctx.save();
@@ -1895,10 +1897,13 @@
       ctx.translate((Math.random() - 0.5) * shakeTime, (Math.random() - 0.5) * shakeTime);
     }
 
-    const sky = ctx.createLinearGradient(0, 0, 0, H);
-    sky.addColorStop(0, L.sky[0]);
-    sky.addColorStop(1, L.sky[1]);
-    ctx.fillStyle = sky;
+    if (skyLevel !== level) {
+      skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+      skyGrad.addColorStop(0, L.sky[0]);
+      skyGrad.addColorStop(1, L.sky[1]);
+      skyLevel = level;
+    }
+    ctx.fillStyle = skyGrad;
     ctx.fillRect(-20, -20, W + 40, H + 40);
 
     for (const c of clouds) drawCloud(c.x, c.y, c.s);
