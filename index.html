@@ -744,8 +744,10 @@
         const overlapX = BIRD_X + HIT_RADIUS > p.x + 4 && BIRD_X - HIT_RADIUS < p.x + PIPE_WIDTH - 4;
         if (overlapX && (bird.y - HIT_RADIUS < p.top || bird.y + HIT_RADIUS > p.top + p.gap)) {
           if (p === guided) {
+            // Bounce off the lip instead of resting on it, so the bird keeps moving
+            const hitBottom = bird.y + HIT_RADIUS > p.top + p.gap;
             bird.y = clamp(bird.y, p.top + HIT_RADIUS, p.top + p.gap - HIT_RADIUS);
-            bird.vy *= 0.5;
+            bird.vy = hitBottom ? -2 : 2;
             break;
           }
           if (takeHit()) { die(); return; }
