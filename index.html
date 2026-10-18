@@ -1946,13 +1946,14 @@
 
   // ---------- Temporary frame-timing readout (remove after debugging) ----------
   const perfText = document.getElementById('perftext');
-  const perf = { last: 0, frames: 0, slow: 0, worst: 0, worstState: '-', worstVy: 0, fallSlow: 0, updMax: 0, rndMax: 0, log: [] };
+  const perf = { last: 0, frames: 0, slow: 0, worst: 0, worstState: '-', worstVy: 0, fallSlow: 0, updMax: 0, rndMax: 0, log: [], fallGapSum: 0, fallFrames: 0, missed: 0 };
   setInterval(() => {
     const recent = perf.log.slice(-4).map(s => s).join('\n');
+    const avgFall = perf.fallFrames ? (perf.fallGapSum / perf.fallFrames).toFixed(1) : '-';
     perfText.textContent =
-      'frames: ' + perf.frames + '   slow (>50ms): ' + perf.slow + '\n' +
+      'frames: ' + perf.frames + '   missed (>25ms): ' + perf.missed + '   slow (>50ms): ' + perf.slow + '\n' +
+      'avg frame gap while falling: ' + avgFall + ' ms (' + perf.fallFrames + ' frames)\n' +
       'worst frame: ' + perf.worst.toFixed(0) + ' ms (' + perf.worstState + ')\n' +
-      'slow frames while falling: ' + perf.fallSlow + '\n' +
       'longest update: ' + perf.updMax.toFixed(1) + ' ms   render: ' + perf.rndMax.toFixed(1) + ' ms' +
       (recent ? '\nrecent:\n' + recent : '');
   }, 500);
@@ -1961,6 +1962,8 @@
       const gap = now - perf.last;
       perf.frames++;
       if (gap > perf.worst) { perf.worst = gap; perf.worstState = ['READY','PLAYING','CLEAR','DEAD','WIN'][state]; }
+      if (gap > 25) perf.missed++;
+      if (state === S.PLAYING && bird.vy > 0) { perf.fallGapSum += gap; perf.fallFrames++; }
       if (gap > 50) {
         perf.slow++;
         if (state === S.PLAYING && bird.vy > 0) perf.fallSlow++;
