@@ -148,8 +148,9 @@
   const soundAllowed = () => ytAudio && !appPaused;
   let rafId = 0;
   let track = null;
-  let musicStep = 0;
-  let nextNoteTime = 0;
+  // Music is rendered once per track into a short loop and then simply repeated
+  const loopCache = new Map(), loopPending = new Set();
+  let wantedTrack = null, musicSrc = null, musicGain = null;
 
   function ensureAudio() {
     if (!AC) return;
@@ -158,8 +159,10 @@
       noiseBuf = actx.createBuffer(1, Math.floor(actx.sampleRate * 0.05), actx.sampleRate);
       const d = noiseBuf.getChannelData(0);
       for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-      nextNoteTime = actx.currentTime + 0.05;
-      setInterval(schedule, 50);
+      musicGain = actx.createGain();
+      musicGain.gain.value = soundOn ? 1 : 0;
+      musicGain.connect(actx.destination);
+      playMusic(wantedTrack);
     }
     syncAudio();
   }
@@ -201,27 +204,66 @@
     s.onended = () => { s.disconnect(); f.disconnect(); g.disconnect(); };
   }
 
-  function schedule() {
-    if (!actx || !soundOn || !soundAllowed() || !track) return;
-    if (nextNoteTime < actx.currentTime) nextNoteTime = actx.currentTime + 0.05;
-    const eighth = 60 / track.bpm / 2;
-    while (nextNoteTime < actx.currentTime + 0.25) {   // look further ahead so a slow frame cannot starve the music
-      const s = musicStep % 16;
-      const lf = noteFreq(track.lead[s]);
-      if (lf) tone(lf, nextNoteTime, eighth * 0.9, track.wave, 0.06);
-      const bf = noteFreq(track.bass[s]);
-      if (bf) tone(bf, nextNoteTime, eighth * 0.9, 'triangle', 0.1);
-      if (s % 2 === 1) hat(nextNoteTime);
-      nextNoteTime += eighth;
-      musicStep++;
+  // Render one 16-eighth-note loop of a track offline, using the same voices as before
+  function buildLoop(tr) {
+    const sr = actx.sampleRate;
+    const eighth = 60 / tr.bpm / 2;
+    const off = new OfflineAudioContext(1, Math.round(16 * eighth * sr), sr);
+    const savedCtx = actx, savedNoise = noiseBuf;
+    actx = off;
+    noiseBuf = off.createBuffer(1, Math.floor(sr * 0.05), sr);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    for (let s = 0; s < 16; s++) {
+      const t = s * eighth;
+      const lf = noteFreq(tr.lead[s]);
+      if (lf) tone(lf, t, eighth * 0.9, tr.wave, 0.06);
+      const bf = noteFreq(tr.bass[s]);
+      if (bf) tone(bf, t, eighth * 0.9, 'triangle', 0.1);
+      if (s % 2 === 1) hat(t);
     }
+    actx = savedCtx;
+    noiseBuf = savedNoise;
+    return off.startRendering();
+  }
+
+  function stopMusic() {
+    if (!musicSrc) return;
+    try { musicSrc.stop(); } catch (e) {}
+    musicSrc.disconnect();
+    musicSrc = null;
+  }
+
+  function startMusic(buf) {
+    stopMusic();
+    musicSrc = actx.createBufferSource();
+    musicSrc.buffer = buf;
+    musicSrc.loop = true;
+    musicSrc.connect(musicGain);
+    musicSrc.start();
+  }
+
+  function playMusic(tr) {
+    wantedTrack = tr;
+    if (!actx) return;
+    stopMusic();
+    if (!tr) return;
+    const buf = loopCache.get(tr);
+    if (buf) { startMusic(buf); return; }
+    if (loopPending.has(tr)) return;
+    loopPending.add(tr);
+    buildLoop(tr).then((b) => {
+      loopCache.set(tr, b);
+      loopPending.delete(tr);
+      if (wantedTrack === tr) startMusic(b);
+    }).catch(() => { loopPending.delete(tr); });
   }
 
   function setTrack(i) {
     if (i === 'boss') track = BOSS_MUSIC;
     else if (i === 'win') track = VICTORY_MUSIC;
     else track = (i == null) ? null : LEVELS[i].music;
-    musicStep = 0;
+    playMusic(track);
   }
 
   function sfx(fn) { if (actx && soundOn && soundAllowed()) fn(actx.currentTime); }
@@ -237,7 +279,7 @@
 
   function toggleSound() {
     soundOn = !soundOn;
-    if (soundOn && actx) nextNoteTime = actx.currentTime + 0.05;
+    if (musicGain) musicGain.gain.value = soundOn ? 1 : 0;
   }
 
   // ---------- Game state ----------
