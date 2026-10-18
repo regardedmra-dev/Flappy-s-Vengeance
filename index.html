@@ -35,7 +35,8 @@
 </head>
 <body>
 <canvas id="game" width="400" height="600"></canvas>
-<div id="perf" style="color:#ddd;font:11px monospace;margin-top:8px;white-space:pre;text-align:left;width:min(calc(100vw - 16px), calc((100vh - 16px) * 2 / 3))"><span id="perftext">timing: starting...</span></div>
+<div id="perf" style="color:#ddd;font:11px monospace;margin-top:8px;white-space:pre;text-align:left;width:min(calc(100vw - 16px), calc((100vh - 16px) * 2 / 3))"><button id="snd" style="font:11px monospace;padding:3px 6px;margin-bottom:4px">Sound: on</button>
+<span id="perftext">timing: starting...</span></div>
 
 <script>
 (() => {
@@ -1976,10 +1977,13 @@
 
   // ---------- Temporary frame-timing readout (remove after debugging) ----------
   const perfText = document.getElementById('perftext');
+  const sndBtn = document.getElementById('snd');
+  sndBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleSound(); });
   const perf = { last: 0, frames: 0, slow: 0, worst: 0, worstState: '-', worstVy: 0, fallSlow: 0, updMax: 0, rndMax: 0, log: [], fallGapSum: 0, fallFrames: 0, missed: 0 };
   setInterval(() => {
     const recent = perf.log.slice(-4).map(s => s).join('\n');
     const avgFall = perf.fallFrames ? (perf.fallGapSum / perf.fallFrames).toFixed(1) : '-';
+    sndBtn.textContent = 'Sound: ' + (soundOn ? 'on' : 'off');
     perfText.textContent =
       'frames: ' + perf.frames + '   missed (>12ms): ' + perf.missed + '   slow (>50ms): ' + perf.slow + '\n' +
       'avg frame gap while falling: ' + avgFall + ' ms (' + perf.fallFrames + ' frames)\n' +
