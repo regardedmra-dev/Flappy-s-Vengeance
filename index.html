@@ -35,8 +35,6 @@
 </head>
 <body>
 <canvas id="game" width="400" height="600"></canvas>
-<div id="perf" style="color:#ddd;font:11px monospace;margin-top:8px;white-space:pre;text-align:left;width:min(calc(100vw - 16px), calc((100vh - 16px) * 2 / 3))"><button id="snd" style="font:11px monospace;padding:3px 6px;margin-bottom:4px">Sound: on</button>
-<span id="perftext">timing: starting...</span></div>
 
 <script>
 (() => {
@@ -2041,44 +2039,8 @@
     ctx.restore();
   }
 
-  // ---------- Temporary frame-timing readout (remove after debugging) ----------
-  const perfText = document.getElementById('perftext');
-  const sndBtn = document.getElementById('snd');
-  sndBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleSound(); });
-  const perf = { last: 0, frames: 0, slow: 0, worst: 0, worstState: '-', worstVy: 0, fallSlow: 0, updMax: 0, rndMax: 0, log: [], fallGapSum: 0, fallFrames: 0, missed: 0 };
-  setInterval(() => {
-    const recent = perf.log.slice(-4).map(s => s).join('\n');
-    const avgFall = perf.fallFrames ? (perf.fallGapSum / perf.fallFrames).toFixed(1) : '-';
-    sndBtn.textContent = 'Sound: ' + (soundOn ? 'on' : 'off');
-    perfText.textContent =
-      'frames: ' + perf.frames + '   dropped (>25ms): ' + perf.missed + '   slow (>50ms): ' + perf.slow + '\n' +
-      'avg frame gap while falling: ' + avgFall + ' ms (' + perf.fallFrames + ' frames)\n' +
-      'worst frame: ' + perf.worst.toFixed(0) + ' ms (' + perf.worstState + ')\n' +
-      'longest update: ' + perf.updMax.toFixed(1) + ' ms   render: ' + perf.rndMax.toFixed(1) + ' ms' +
-      (recent ? '\nrecent:\n' + recent : '');
-  }, 500);
-  function loop(now) {
-    if (perf.last) {
-      const gap = now - perf.last;
-      perf.frames++;
-      if (gap > perf.worst) { perf.worst = gap; perf.worstState = ['READY','PLAYING','CLEAR','DEAD','WIN'][state]; }
-      if (gap > 25) perf.missed++;   // a dropped frame at 60 Hz (normal frames are ~17 ms)
-      if (state === S.PLAYING && bird.vy > 0) { perf.fallGapSum += gap; perf.fallFrames++; }
-      if (gap > 50) {
-        perf.slow++;
-        if (state === S.PLAYING && bird.vy > 0) perf.fallSlow++;
-        perf.log.push(gap.toFixed(0) + ' ms, ' + ['READY','PLAYING','CLEAR','DEAD','WIN'][state] + ', vy ' + bird.vy.toFixed(1));
-        if (perf.log.length > 20) perf.log.shift();
-      }
-    }
-    perf.last = now;
-    const t0 = performance.now();
-    if (loaded) { update(); }
-    const t1 = performance.now();
-    if (loaded) { render(); } else { drawLoading(); }
-    const t2 = performance.now();
-    perf.updMax = Math.max(perf.updMax * 0.99, t1 - t0);
-    perf.rndMax = Math.max(perf.rndMax * 0.99, t2 - t1);
+  function loop() {
+    if (loaded) { update(); render(); } else { drawLoading(); }
     rafId = requestAnimationFrame(loop);
   }
 
