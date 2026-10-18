@@ -1985,7 +1985,7 @@
     const avgFall = perf.fallFrames ? (perf.fallGapSum / perf.fallFrames).toFixed(1) : '-';
     sndBtn.textContent = 'Sound: ' + (soundOn ? 'on' : 'off');
     perfText.textContent =
-      'frames: ' + perf.frames + '   missed (>12ms): ' + perf.missed + '   slow (>50ms): ' + perf.slow + '\n' +
+      'frames: ' + perf.frames + '   dropped (>25ms): ' + perf.missed + '   slow (>50ms): ' + perf.slow + '\n' +
       'avg frame gap while falling: ' + avgFall + ' ms (' + perf.fallFrames + ' frames)\n' +
       'worst frame: ' + perf.worst.toFixed(0) + ' ms (' + perf.worstState + ')\n' +
       'longest update: ' + perf.updMax.toFixed(1) + ' ms   render: ' + perf.rndMax.toFixed(1) + ' ms' +
@@ -1996,7 +1996,7 @@
       const gap = now - perf.last;
       perf.frames++;
       if (gap > perf.worst) { perf.worst = gap; perf.worstState = ['READY','PLAYING','CLEAR','DEAD','WIN'][state]; }
-      if (gap > 12) perf.missed++;   // 60 Hz drops show as ~17 ms gaps on a 120 Hz phone
+      if (gap > 25) perf.missed++;   // a dropped frame at 60 Hz (normal frames are ~17 ms)
       if (state === S.PLAYING && bird.vy > 0) { perf.fallGapSum += gap; perf.fallFrames++; }
       if (gap > 50) {
         perf.slow++;
